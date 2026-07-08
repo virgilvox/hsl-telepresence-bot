@@ -48,9 +48,12 @@ impl Config {
             drive_timeout: Duration::from_millis(parse("DRIVE_TIMEOUT_MS", 400)?),
             max_speed: parse("MAX_SPEED", 1.0f64)?.clamp(0.0, 1.0),
 
+            // Default to the 1280x480 side-by-side mode: it fits the Pi's H264
+            // encoder (max 1920 wide) and keeps JPEG decode light. The camera
+            // also offers 2560-wide modes, but those exceed the encoder.
             camera_device: env_or("CAMERA_DEVICE", "/dev/video0"),
-            camera_width: parse("CAMERA_WIDTH", 2560)?,
-            camera_height: parse("CAMERA_HEIGHT", 720)?,
+            camera_width: parse("CAMERA_WIDTH", 1280)?,
+            camera_height: parse("CAMERA_HEIGHT", 480)?,
             camera_fps: parse("CAMERA_FPS", 30)?,
         })
     }

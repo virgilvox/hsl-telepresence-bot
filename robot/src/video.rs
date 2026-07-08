@@ -112,10 +112,15 @@ impl Session {
         viewer: &str,
         out_tx: UnboundedSender<SignalMessage>,
     ) -> anyhow::Result<Self> {
+        // The Pi's VideoCore H264 encoder requires explicit output caps
+        // (a level string), otherwise it fails to process frames. It also
+        // maxes out at 1920 wide, so capture the camera's 1280x480 side-by-side
+        // mode rather than its 2560-wide modes.
         let description = format!(
             "v4l2src device={device} ! image/jpeg,width={width},height={height},framerate={fps}/1 \
-             ! jpegdec ! videoconvert ! queue \
-             ! v4l2h264enc ! h264parse config-interval=-1 \
+             ! jpegdec ! queue ! videoconvert ! video/x-raw,format=I420 \
+             ! v4l2h264enc ! video/x-h264,level=(string)4 \
+             ! h264parse config-interval=-1 \
              ! rtph264pay pt=96 ! application/x-rtp,media=video,encoding-name=H264,payload=96 \
              ! webrtcbin name=webrtc bundle-policy=max-bundle",
             device = cfg.camera_device,
@@ -204,7 +209,9 @@ impl Session {
 }
 
 fn create_offer(webrtc: &gst::Element, out_tx: UnboundedSender<SignalMessage>, from: String) {
-    let webrtc = webrtc.clone();
+    // One clone is moved into the promise callback; the reference is used for
+    // the create-offer call itself.
+    let webrtc_local = webrtc.clone();
     let promise = gst::Promise::with_change_func(move |reply| {
         let Ok(Some(reply)) = reply else {
             tracing::warn!("create-offer produced no reply");
@@ -214,7 +221,7 @@ fn create_offer(webrtc: &gst::Element, out_tx: UnboundedSender<SignalMessage>, f
             tracing::warn!("create-offer reply had no offer");
             return;
         };
-        webrtc.emit_by_name::<()>("set-local-description", &[&offer, &None::<gst::Promise>]);
+        webrtc_local.emit_by_name::<()>("set-local-description", &[&offer, &None::<gst::Promise>]);
         if let Ok(sdp) = offer.sdp().as_text() {
             let _ = out_tx.send(SignalMessage::Offer {
                 from: from.clone(),

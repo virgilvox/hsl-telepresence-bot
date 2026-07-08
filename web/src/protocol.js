@@ -13,7 +13,7 @@ export function addresses(robotId) {
     status: (name) => `${base}/status/${name}`,
     statusPattern: `${base}/status/**`,
     telPattern: `${base}/tel/**`,
-    videoPresence: (session) => `${base}/video/presence/${session}`,
+    videoHello: `${base}/video/hello`,
     videoSignal: (session) => `${base}/video/signal/${session}`,
   }
 }

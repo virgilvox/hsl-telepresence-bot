@@ -55,9 +55,12 @@ impl Addresses {
         format!("{}/tel/{name}", self.base)
     }
 
-    /// Pattern the robot subscribes to so it learns when a viewer is present.
-    pub fn video_presence_pattern(&self) -> String {
-        format!("{}/video/presence/**", self.base)
+    /// Shared address a viewer emits a `hello` Event to when it wants a stream.
+    /// An Event (not a Param) so it is never snapshotted: only live viewers are
+    /// seen, and stale entries cannot accumulate. Viewers repeat it until they
+    /// have video, which also lets the robot recover across restarts.
+    pub fn video_hello(&self) -> String {
+        format!("{}/video/hello", self.base)
     }
 
     /// Address a signaling message is delivered to. Messages are keyed by the
@@ -124,8 +127,7 @@ impl SignalMessage {
     }
 }
 
-/// Presence record a viewer publishes as a Param at
-/// `video/presence/<session>` so the robot knows to start streaming to it.
+/// Payload of a viewer's `hello` Event, telling the robot who wants a stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Presence {
     pub session: String,

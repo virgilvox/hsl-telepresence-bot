@@ -109,17 +109,14 @@ async fn subscribe_video(
     session: &str,
     video_tx: UnboundedSender<VideoEvent>,
 ) -> anyhow::Result<()> {
-    // Viewers announce themselves via presence Params.
+    // Viewers announce themselves with a hello Event.
     let tx = video_tx.clone();
     client
-        .subscribe(
-            addr.video_presence_pattern().as_str(),
-            move |value, _address| {
-                if let Some(presence) = decode::<Presence>(&value) {
-                    let _ = tx.send(VideoEvent::ViewerPresent(presence));
-                }
-            },
-        )
+        .subscribe(addr.video_hello().as_str(), move |value, _address| {
+            if let Some(presence) = decode::<Presence>(&value) {
+                let _ = tx.send(VideoEvent::ViewerPresent(presence));
+            }
+        })
         .await?;
 
     // Signaling addressed to us. The address ends with the recipient session;

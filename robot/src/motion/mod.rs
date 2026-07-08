@@ -8,6 +8,7 @@
 //! connection therefore stops the robot rather than freezing its last command.
 
 mod drive;
+#[cfg(not(feature = "motor-hat"))]
 mod mock;
 #[cfg(feature = "motor-hat")]
 mod pca9685;

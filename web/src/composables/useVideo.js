@@ -17,6 +17,7 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
   let pc = null
   let robotSession = null
   let unsub = null
+  let helloTimer = null
 
   function addr() {
     return addresses(robotId.value)
@@ -115,14 +116,21 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
     unsub = c.on(addr().videoSignal(sessionId.value), (value) => {
       handleSignal(value)
     })
-    // Announce presence so the robot starts an offer.
-    c.set(addr().videoPresence(sessionId.value), {
-      session: sessionId.value,
-      role: 'viewer',
-    })
+    // Say hello until we have a live stream. Repeating handles a robot that
+    // starts after us, a lost hello, or a robot restart mid-session.
+    const hello = () => {
+      if (state.value === 'live') return
+      c.emit(addr().videoHello, { session: sessionId.value, role: 'viewer' })
+    }
+    hello()
+    helloTimer = setInterval(hello, 2000)
   }
 
   function stop() {
+    if (helloTimer) {
+      clearInterval(helloTimer)
+      helloTimer = null
+    }
     if (unsub) {
       try {
         unsub()
