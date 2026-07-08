@@ -12,7 +12,7 @@ import { useVideo } from './composables/useVideo.js'
 
 const STORAGE_KEY = 'hsl-console-settings'
 
-const defaults = { robotId: 'hsl-bot-1', url: 'wss://relay.clasp.to', token: '' }
+const defaults = { robotId: 'hslbot', url: 'wss://relay.clasp.to', token: '' }
 const settings = reactive({ ...defaults, ...loadSettings() })
 
 const robotId = computed(() => settings.robotId)
