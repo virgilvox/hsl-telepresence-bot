@@ -1,0 +1,26 @@
+# systemd unit for the telepresence robot agent.
+# Install:
+#   sudo cp target/release/robot /usr/local/bin/hsl-robot
+#   sudo mkdir -p /etc/hsl-telepresence
+#   sudo cp deploy/pi/robot.env.example /etc/hsl-telepresence/robot.env
+#   sudo cp deploy/pi/robot.service /etc/systemd/system/hsl-robot.service
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hsl-robot
+
+[Unit]
+Description=HeatSync Labs telepresence robot agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/hsl-telepresence/robot.env
+ExecStart=/usr/local/bin/hsl-robot
+Restart=on-failure
+RestartSec=3
+# The process needs the I2C and video devices. Add the pi user to the i2c and
+# video groups, or run as a dedicated user with those groups.
+User=pi
+SupplementaryGroups=i2c video
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,22 @@
+# DigitalOcean App Platform spec for the operator console (static site).
+# Create the app with:
+#   doctl apps create --spec deploy/digitalocean/app.yaml
+# or paste this in the App Platform UI. Update the `github.repo` field to your
+# fork before deploying.
+
+name: hsl-telepresence-console
+region: nyc
+
+static_sites:
+  - name: console
+    github:
+      repo: your-org/hsl-telepresence-bot
+      branch: main
+      deploy_on_push: true
+    source_dir: web
+    build_command: npm ci && npm run build
+    output_dir: dist
+    # Single-page app: serve index.html for unknown routes.
+    catchall_document: index.html
+    routes:
+      - path: /

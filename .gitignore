@@ -1,0 +1,13 @@
+# Rust
+/robot/target/
+
+# Node / web
+/web/node_modules/
+/web/dist/
+
+# Local env and logs
+.env
+*.log
+
+# OS
+.DS_Store
