@@ -68,8 +68,9 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
   }
 
   async function onOffer(message) {
-    robotSession = message.from
     state.value = 'connecting'
+    // newPeer() tears down any prior peer and clears robotSession, so set it
+    // after building the fresh connection.
     const peer = newPeer()
     robotSession = message.from
     await peer.setRemoteDescription({ type: 'offer', sdp: message.sdp })

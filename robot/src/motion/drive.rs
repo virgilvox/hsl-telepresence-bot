@@ -124,7 +124,13 @@ fn apply(
             *coasting = false;
             let _ = speeds_tx.send(speeds);
         }
-        Err(err) => tracing::error!(%err, "failed to drive motors"),
+        Err(err) => {
+            // Fail safe: a failed drive write leaves the motors in an unknown
+            // state, so try to stop them. coast() only marks us coasting if the
+            // stop itself succeeds, so the watchdog keeps retrying otherwise.
+            tracing::error!(%err, "failed to drive motors, coasting");
+            coast(backend, speeds_tx, coasting);
+        }
     }
 }
 
@@ -180,5 +186,72 @@ mod tests {
     fn output_is_clamped() {
         let s = mix(1.0, 1.0, 1.0);
         assert!(s.left <= 1.0 && s.right >= -1.0);
+    }
+
+    // Exercises the running motion task through the mock backend. Only valid
+    // when the real HAT is not compiled in (otherwise spawn tries to open I2C).
+    #[cfg(not(feature = "motor-hat"))]
+    fn test_config() -> Config {
+        Config {
+            robot_id: "test".into(),
+            robot_name: "test".into(),
+            clasp_url: String::new(),
+            clasp_token: None,
+            i2c_bus: String::new(),
+            i2c_address: 0x60,
+            drive_timeout: Duration::from_secs(10),
+            max_speed: 1.0,
+            camera_device: String::new(),
+            camera_width: 0,
+            camera_height: 0,
+            camera_fps: 0,
+        }
+    }
+
+    #[cfg(not(feature = "motor-hat"))]
+    #[tokio::test]
+    async fn estop_blocks_and_clears() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let handle = spawn(&test_config(), rx).unwrap();
+        let mut speeds = handle.speeds.clone();
+
+        // A drive command moves the wheels.
+        tx.send(MotionCommand::Drive(DriveCommand {
+            throttle: 1.0,
+            steer: 0.0,
+            seq: 0,
+            ts: 0,
+        }))
+        .unwrap();
+        speeds.changed().await.unwrap();
+        assert!(speeds.borrow().left > 0.0);
+
+        // Engaging e-stop coasts.
+        tx.send(MotionCommand::EStop(true)).unwrap();
+        speeds.changed().await.unwrap();
+        assert_eq!(speeds.borrow().left, 0.0);
+
+        // Drives are ignored while stopped.
+        tx.send(MotionCommand::Drive(DriveCommand {
+            throttle: 1.0,
+            steer: 0.0,
+            seq: 1,
+            ts: 0,
+        }))
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(30)).await;
+        assert_eq!(speeds.borrow().left, 0.0);
+
+        // Clearing e-stop lets drives through again.
+        tx.send(MotionCommand::EStop(false)).unwrap();
+        tx.send(MotionCommand::Drive(DriveCommand {
+            throttle: 1.0,
+            steer: 0.0,
+            seq: 2,
+            ts: 0,
+        }))
+        .unwrap();
+        speeds.changed().await.unwrap();
+        assert!(speeds.borrow().left > 0.0);
     }
 }

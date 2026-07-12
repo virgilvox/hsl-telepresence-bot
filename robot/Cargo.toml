@@ -19,9 +19,11 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Motor HAT path (Linux + I2C only). Absent on non-Pi builds, which fall back
-# to the mock backend so the control and video planes can be developed off-device.
-pwm-pca9685 = { version = "1.0", optional = true }
+# PCA9685 driver and the embedded-hal I2C trait. Pure Rust, so they build
+# everywhere and the register logic is unit-tested off-device. Only the Linux
+# I2cdev backend below is Pi-specific and feature-gated.
+pwm-pca9685 = "1.0"
+embedded-hal = "1"
 linux-embedded-hal = { version = "0.4", features = ["i2c"], optional = true }
 
 # Video plane. Requires GStreamer >= 1.20 and the good/bad/nice plugin sets on
@@ -35,7 +37,7 @@ glib = { version = "0.21", optional = true }
 [features]
 default = ["motor-hat", "video"]
 # Drive the Adafruit DC+Stepper Motor HAT over the Pi's own I2C bus.
-motor-hat = ["dep:pwm-pca9685", "dep:linux-embedded-hal"]
+motor-hat = ["dep:linux-embedded-hal"]
 # Capture the USB camera and stream it over WebRTC via GStreamer.
 video = ["dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-sdp", "dep:gstreamer-webrtc", "dep:glib"]
 

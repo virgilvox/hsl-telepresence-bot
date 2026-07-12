@@ -12,6 +12,7 @@ publishes telemetry.
 | `protocol` | CLASP address and message contract | nothing |
 | `link` | Connect to the relay, route inbound commands, publish status | CLASP only |
 | `motion` | Differential drive, safety watchdog, motor backend | I2C only |
+| `motion::hat_driver` | PCA9685 register logic, generic over the I2C bus, unit-tested | pure logic |
 | `video` | Camera capture and WebRTC media, signaling over CLASP | GStreamer only |
 | `telemetry` | Publish motor duty and e-stop mirror | via `link` |
 | `audio` | Optional mic/speaker, best-effort | nothing yet |

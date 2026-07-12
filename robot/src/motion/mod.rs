@@ -8,6 +8,10 @@
 //! connection therefore stops the robot rather than freezing its last command.
 
 mod drive;
+// Register logic is generic over the I2C bus and is compiled whenever the HAT
+// backend or the tests need it, so its tests run off-device.
+#[cfg(any(feature = "motor-hat", test))]
+mod hat_driver;
 #[cfg(not(feature = "motor-hat"))]
 mod mock;
 #[cfg(feature = "motor-hat")]

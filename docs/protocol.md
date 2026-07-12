@@ -25,7 +25,7 @@ a single lossy frame.
 | `status/estop` | Param | `bool` | Robot's mirror of the e-stop state, for the console. |
 | `status/battery` | Param | `number` 0..1 | Optional. Rendered when present. |
 | `tel/motors` | Stream | `{ left, right }` | Applied wheel demand, ~5 Hz. |
-| `video/presence/<session>` | Param | `{ session, role }` | A viewer announces itself here. |
+| `video/hello` | Event | `{ session, role }` | A viewer announces it wants a stream. Repeated until it has video. |
 | `video/signal/<session>` | Event | `SignalMessage` | SDP/ICE, keyed by recipient session. |
 
 ## DriveCommand
@@ -50,10 +50,17 @@ session id) so a peer can reply and can ignore echoes of its own messages.
 { "kind": "bye",    "from": "<session>" }
 ```
 
-The robot is the offerer. On seeing a viewer's presence Param it sends an
-`offer` to `video/signal/<viewerSession>`. The viewer replies with an `answer`
-and both trickle `ice` candidates to each other's signaling address. Media flows
-over the resulting native WebRTC track, never over CLASP.
+The robot is the offerer. A viewer emits a `hello` Event (repeating every couple
+of seconds until it has video); on the first hello from a viewer the robot sends
+an `offer` to `video/signal/<viewerSession>`. The viewer replies with an
+`answer` and both trickle `ice` candidates to each other's signaling address.
+Media flows over the resulting native WebRTC track, never over CLASP.
+
+`hello` is an Event rather than a persistent presence Param on purpose. A
+persistent per-session Param would accumulate stale entries (every past console
+session), and the robot would try to start a stream for each ghost on connect.
+An Event is never re-sent to late joiners, so the robot only ever sees live
+viewers, and the repeat cadence also lets video recover after a robot restart.
 
 ## Safety model
 

@@ -11,6 +11,13 @@ Python, CLASP instead of AWS IoT Core, a fresh Vue 3 console instead of the old
 Amplify front end, and GStreamer WebRTC instead of the Kinesis Video Streams C
 SDK.
 
+## Status
+
+Deployed and running on a Pi 3B+ (`hslbot`). Verified end to end: the agent runs
+as a systemd service, connects to the relay, and its control and telemetry work
+over the public relay; the camera captures and the robot produces a live H264
+WebRTC offer. Operating and rebuild notes are in [docs/handoff.md](docs/handoff.md).
+
 ## Hardware
 
 - Raspberry Pi 3 Model B+

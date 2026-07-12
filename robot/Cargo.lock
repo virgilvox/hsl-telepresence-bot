@@ -816,6 +816,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clasp-client",
+ "embedded-hal",
  "glib 0.21.5",
  "gstreamer",
  "gstreamer-app",
