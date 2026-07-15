@@ -201,6 +201,8 @@ mod tests {
             i2c_address: 0x60,
             drive_timeout: Duration::from_secs(10),
             max_speed: 1.0,
+            invert_left: false,
+            invert_right: false,
             camera_device: String::new(),
             camera_width: 0,
             camera_height: 0,

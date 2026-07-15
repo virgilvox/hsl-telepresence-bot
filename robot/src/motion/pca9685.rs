@@ -14,10 +14,17 @@ const PWM_PRESCALE: u8 = 3;
 
 pub struct HatBackend {
     pwm: Pca9685<I2cdev>,
+    invert_left: bool,
+    invert_right: bool,
 }
 
 impl HatBackend {
-    pub fn new(bus: &str, address: u8) -> anyhow::Result<Self> {
+    pub fn new(
+        bus: &str,
+        address: u8,
+        invert_left: bool,
+        invert_right: bool,
+    ) -> anyhow::Result<Self> {
         let dev = I2cdev::new(bus)?;
         let mut pwm = Pca9685::new(dev, hat_address(address))
             .map_err(|e| anyhow::anyhow!("pca9685 init: {e:?}"))?;
@@ -26,7 +33,11 @@ impl HatBackend {
         pwm.enable()
             .map_err(|e| anyhow::anyhow!("pca9685 enable: {e:?}"))?;
 
-        let mut backend = Self { pwm };
+        let mut backend = Self {
+            pwm,
+            invert_left,
+            invert_right,
+        };
         // Start from a known safe state.
         backend.coast()?;
         Ok(backend)
@@ -35,8 +46,12 @@ impl HatBackend {
 
 impl MotorBackend for HatBackend {
     fn set_wheels(&mut self, speeds: WheelSpeeds) -> anyhow::Result<()> {
-        hat_driver::drive_motor(&mut self.pwm, &M1, speeds.left)?;
-        hat_driver::drive_motor(&mut self.pwm, &M2, speeds.right)?;
+        // Apply per-motor inversion for how this chassis is wired (the right
+        // motor is usually mounted mirror-imaged from the left).
+        let left = if self.invert_left { -speeds.left } else { speeds.left };
+        let right = if self.invert_right { -speeds.right } else { speeds.right };
+        hat_driver::drive_motor(&mut self.pwm, &M1, left)?;
+        hat_driver::drive_motor(&mut self.pwm, &M2, right)?;
         Ok(())
     }
 

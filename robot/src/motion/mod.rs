@@ -45,8 +45,19 @@ pub trait MotorBackend: Send {
 /// backend that only logs is used.
 #[cfg(feature = "motor-hat")]
 fn build_backend(cfg: &Config) -> anyhow::Result<Box<dyn MotorBackend>> {
-    let backend = pca9685::HatBackend::new(&cfg.i2c_bus, cfg.i2c_address)?;
-    tracing::info!(bus = %cfg.i2c_bus, address = format!("{:#x}", cfg.i2c_address), "motor HAT ready");
+    let backend = pca9685::HatBackend::new(
+        &cfg.i2c_bus,
+        cfg.i2c_address,
+        cfg.invert_left,
+        cfg.invert_right,
+    )?;
+    tracing::info!(
+        bus = %cfg.i2c_bus,
+        address = format!("{:#x}", cfg.i2c_address),
+        invert_left = cfg.invert_left,
+        invert_right = cfg.invert_right,
+        "motor HAT ready"
+    );
     Ok(Box::new(backend))
 }
 

@@ -24,6 +24,12 @@ pub struct Config {
     pub drive_timeout: Duration,
     /// Upper bound applied to wheel demand, 0.0 to 1.0.
     pub max_speed: f64,
+    /// Reverse the left motor's sense. A differential-drive chassis mounts the
+    /// two motors mirror-imaged, so one wheel usually needs inverting for the
+    /// robot to drive straight. Set to match how this robot is wired.
+    pub invert_left: bool,
+    /// Reverse the right motor's sense. See `invert_left`.
+    pub invert_right: bool,
 
     /// V4L2 device for the stereoscopic USB camera.
     pub camera_device: String,
@@ -47,6 +53,8 @@ impl Config {
             i2c_address: parse_u8("I2C_ADDRESS", 0x60)?,
             drive_timeout: Duration::from_millis(parse("DRIVE_TIMEOUT_MS", 400)?),
             max_speed: parse("MAX_SPEED", 1.0f64)?.clamp(0.0, 1.0),
+            invert_left: parse_bool("INVERT_LEFT", false),
+            invert_right: parse_bool("INVERT_RIGHT", false),
 
             // Default to the 1280x480 side-by-side mode: it fits the Pi's H264
             // encoder (max 1920 wide) and keeps JPEG decode light. The camera
@@ -73,6 +81,18 @@ where
             .parse()
             .with_context(|| format!("invalid value for {key}")),
         Err(_) => Ok(default),
+    }
+}
+
+/// Parse a boolean env flag. Accepts 1/true/yes/on (any case) as true; anything
+/// else, including unset, is the given default.
+fn parse_bool(key: &str, default: bool) -> bool {
+    match std::env::var(key) {
+        Ok(v) => matches!(
+            v.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        ),
+        Err(_) => default,
     }
 }
 

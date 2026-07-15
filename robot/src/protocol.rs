@@ -84,11 +84,33 @@ pub struct DriveCommand {
     /// Turn demand, -1.0 (full left) to 1.0 (full right).
     pub steer: f64,
     /// Monotonic sequence number from the operator, for out-of-order detection.
-    #[serde(default)]
+    /// The browser sends JS numbers, which CLASP may carry as either an integer
+    /// or a float, so parse leniently: a float here must not fail the whole
+    /// command (which would silently drop teleop and freeze the robot).
+    #[serde(default, deserialize_with = "de_lenient_u64")]
     pub seq: u64,
     /// Operator send timestamp in milliseconds, for latency measurement.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_lenient_u64")]
     pub ts: u64,
+}
+
+/// Deserialize a `u64` from any JSON number, integer or float. `Date.now()` and
+/// a sequence counter arrive from JavaScript as plain numbers that CLASP can tag
+/// as `Float`; serde's default `u64` path rejects a float outright, so we coerce
+/// instead of erroring.
+fn de_lenient_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    match serde_json::Value::deserialize(deserializer)? {
+        serde_json::Value::Number(n) => Ok(n
+            .as_u64()
+            .or_else(|| n.as_i64().map(|i| i.max(0) as u64))
+            .or_else(|| n.as_f64().map(|f| f.max(0.0) as u64))
+            .unwrap_or(0)),
+        _ => Ok(0),
+    }
 }
 
 /// WebRTC signaling message exchanged over the `video/signal/<session>` Event
