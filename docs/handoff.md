@@ -1,6 +1,6 @@
 # Handoff
 
-Last updated 2026-07-14.
+Last updated 2026-07-15.
 
 Current state of the telepresence robot, what is verified, and what to do next.
 
@@ -13,49 +13,63 @@ Current state of the telepresence robot, what is verified, and what to do next.
 - The Pi now carries a full git clone of `origin/main` at
   `/home/pi/hsl-telepresence-bot`, and a timer-driven self-updater keeps it on
   the latest code (see "Self-update"). The installed binary
-  (`/usr/local/bin/hsl-robot`) is built from the current `main` and includes the
-  motor-control fix below.
+  (`/usr/local/bin/hsl-robot`) is built from the current `main`.
 - The operator console is a Vue 3 static site in `web/`. It defaults to robot id
   `hslbot` and connects to `wss://relay.clasp.to`. Run it locally with
   `cd web && npm run dev`, or deploy it to DigitalOcean App Platform with
   `deploy/digitalocean/app.yaml`.
-- Verified working end to end: service comes online, control and telemetry pass
-  over the relay (confirmed from an independent client), the USB camera captures,
-  and the robot emits a live H264 WebRTC offer when a viewer says hello.
+- **Teleop drives the motors from the console** (confirmed on hardware). Video
+  streams live to the console over WebRTC. Control and telemetry pass over the
+  relay. The camera captures its side-by-side mode.
 
 ## Action items, in order
 
-1. **Confirm driving on hardware.** With the wheels clear, drive from the
-   console and confirm forward, reverse, and turning. This is the one thing the
-   automated tests cannot prove. The agent now runs the fixed binary, so this is
-   ready to try.
-2. **Confirm the video picture renders** in the browser (the robot side of the
-   WebRTC handshake is proven; the browser answer/ICE path needs a real browser
-   to confirm the frames paint).
+1. **Confirm drive direction.** Forward now drives both wheels the same way
+   (`INVERT_RIGHT=true`, see below). With the wheels clear, sanity-check that
+   forward/reverse and left/right turns all go the intended way; adjust the
+   `INVERT_*` env flags if any axis is reversed. No rebuild needed for that.
+2. **Confirm the video picture renders** in the browser end to end (proven from
+   the operator console this session; worth a second independent check).
 
-The earlier "redeploy to pick up the motor fix" item is done: the Pi was
-converted to a git clone, rebuilt from `main`, and is running the fixed binary.
+## Making teleop actually drive (2026-07-15 session)
 
-## Motor control audit finding (fixed in code, needs redeploy)
+The wheels were wired to M1/M2 with motor power on, but the console could not
+drive them. Three distinct things were in the way, now all resolved:
 
-The PCA9685 drives each motor's direction pins to full HIGH or full LOW using a
-per-channel full-ON bit and full-OFF bit. Per the datasheet, **full-OFF takes
-precedence over full-ON**, and the `pwm-pca9685` crate's `set_channel_full_on`
-and `set_channel_full_off` each write only their own side and never clear the
-other. The startup coast set the full-OFF bit on both direction pins, so the
-later `set_channel_full_on` could not drive them high: after the first coast the
-direction pins were stuck low and **the motors would never turn**.
+1. **Drive commands failed to deserialize (the real teleop bug).** Drive is a
+   CLASP Stream and *was* reaching the robot, but `DriveCommand.seq`/`.ts` were
+   `u64` while the browser sends `Date.now()` and the seq counter as JS numbers
+   that CLASP can tag as `Float`. serde rejects a float into `u64`, so the whole
+   command was dropped before the motor task saw it. `seq`/`ts` now deserialize
+   leniently from any number encoding (`de_lenient_u64` in `protocol.rs`); they
+   are informational only, the motor task reads just `throttle`/`steer`. This is
+   why a direct I2C poke spun the wheels but teleop did nothing.
+2. **Right motor ran reversed.** The chassis mounts the two motors
+   mirror-imaged. Added `INVERT_LEFT`/`INVERT_RIGHT` env flags
+   (`config.rs` -> `pca9685.rs`); `hslbot` runs `INVERT_RIGHT=true`.
+3. **A latched e-stop was silently blocking motion.** `cmd/estop` had been left
+   engaged; while engaged the robot ignores every drive by design. Cleared from
+   the console (see Operating).
 
-The fix (in `robot/src/motion/hat_driver.rs`) sets a pin HIGH by setting full-ON
-and clearing the full-OFF bit, and sets it LOW by setting full-OFF and clearing
-full-ON. The register logic is now generic over the I2C bus and unit-tested with
-a recording mock (`cargo test --no-default-features`), including a regression
-test that asserts the full-OFF bit is cleared when a direction pin goes high.
-Those tests run on any machine, no Pi required.
+The motor **register logic was never broken.** It matches Adafruit's library and
+the `pwm-pca9685` full-OFF-precedence rule, and a direct I2C drive spun both
+wheels. See "Motor register logic" for the earlier audit that got it right.
 
-Other motor-control hardening from the audit:
+## Motor register logic (audit, already deployed)
 
-- A failed drive write now fails safe by attempting to coast.
+The PCA9685 drives each direction pin to full HIGH or full LOW via a per-channel
+full-ON bit and full-OFF bit. Per the datasheet (and the crate's own docs),
+**full-OFF takes precedence over full-ON**, and `pwm-pca9685`'s
+`set_channel_full_on`/`set_channel_full_off` each write only their own side. So
+driving a pin HIGH must set full-ON *and clear* full-OFF, and LOW the reverse.
+Missing that would leave the direction pins stuck low after the startup coast.
+`robot/src/motion/hat_driver.rs` does it correctly and is unit-tested with a
+recording mock (`cargo test --no-default-features`, 10 tests pass), including a
+regression test asserting the full-OFF bit is cleared when a pin goes high.
+
+Other motor-control hardening in place:
+
+- A failed drive write fails safe by attempting to coast.
 - Non-finite speed inputs map to a stop rather than an undefined cast.
 - A deterministic test covers the e-stop invariant (drives ignored while
   stopped, resumed when cleared).
@@ -71,12 +85,21 @@ systemctl restart hsl-robot         # restart
 ```
 
 Config is in `/etc/hsl-telepresence/robot.env` (id, relay URL, I2C bus/address,
-drive timeout, max speed, camera device and resolution, log level).
+drive timeout, max speed, `INVERT_LEFT`/`INVERT_RIGHT` motor direction, camera
+device and resolution, log level). Editing it needs a `systemctl restart
+hsl-robot` to take effect.
 
 From the console: set the robot id to `hslbot`, connect, drive with the pad or
-WASD, and toggle Left/Both/Right to pick an eye of the stereo feed. The e-stop is
-a latched Param; if the robot ever comes up stopped, release it from the console
-or clear `/robot/hslbot/cmd/estop` on the relay.
+WASD (**hold** the key/drag; it only sends while held, and the watchdog coasts
+~400 ms after input stops), and toggle Left/Both/Right to pick an eye of the
+stereo feed.
+
+**If the robot will not drive, check the e-stop first.** It is a latched Param.
+When engaged, the console's big button reads "Release stop" (filled red) and the
+robot ignores all drive; click it to release, or clear `/robot/hslbot/cmd/estop`
+on the relay. If a long-running robot stops reacting to the e-stop button or
+config changes (a live-Param delivery hiccup seen once this session), a
+`systemctl restart hsl-robot` re-reads the latched state and restores it.
 
 ## Rebuild and redeploy
 
@@ -159,6 +182,10 @@ with `--no-default-features` to use the mock motor backend and skip GStreamer.
 - Audio has no hardware; the audio task is a best-effort no-op.
 - Public relay auth and rate limits are not documented; the robot connects
   anonymously. Self-hosting `clasp-relay` is the documented fallback.
+- Seen once: a long-running robot stopped acting on live `cmd/estop` Param
+  updates (drive Streams kept flowing) until a restart, which re-reads the
+  latched value. Not yet root-caused; if it recurs, suspect the CLASP client's
+  pattern-subscription liveness for Params. A restart is the workaround.
 
 ## Where to look
 
