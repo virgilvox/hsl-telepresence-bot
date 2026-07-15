@@ -138,17 +138,24 @@ with `--no-default-features` to use the mock motor backend and skip GStreamer.
 - Camera is a UVC "3D USB Camera" (`05a3:9750`), MJPEG side-by-side. It draws
   enough current that it only enumerates cleanly on a good port or powered hub;
   a bad cable or weak port shows up as `error -32 / unable to enumerate` in
-  `dmesg`, not as a driver problem (UVC needs no drivers).
+  `dmesg`, not as a driver problem (UVC needs no drivers). After such a glitch it
+  can re-enumerate onto a different `/dev/videoN`, so the env points
+  `CAMERA_DEVICE` at the stable `/dev/v4l/by-id/...-video-index0` symlink and the
+  agent falls back to the first by-id capture node if the configured one is gone.
 - The Pi's hardware H264 encoder maxes out at 1920 wide and needs explicit
   `video/x-h264,level=(string)4` output caps, so the robot captures the camera's
   **1280x480** mode, not its 2560-wide modes.
 
 ## Known limitations
 
-- Video serves one viewer at a time; a new viewer replaces the current session.
-- A viewer that leaves without a `bye` leaves the robot streaming until another
-  viewer connects (no idle-session timeout yet). CPU waste, not a correctness
-  problem.
+- Video serves one viewer at a time. The established viewer holds the camera; a
+  second operator sees "waiting" until the first disconnects. A session that
+  never establishes within a grace window can be handed to a waiting viewer, so
+  a stale viewer does not block the camera forever.
+- A viewer that closes its tab is detected when its WebRTC connection fails, and
+  the session is torn down so the next viewer can take over. There is no
+  explicit `bye` on close yet, so recovery waits on the ICE failure timeout
+  (seconds), not instant.
 - Audio has no hardware; the audio task is a best-effort no-op.
 - Public relay auth and rate limits are not documented; the robot connects
   anonymously. Self-hosting `clasp-relay` is the documented fallback.

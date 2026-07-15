@@ -56,6 +56,14 @@ an `offer` to `video/signal/<viewerSession>`. The viewer replies with an
 `answer` and both trickle `ice` candidates to each other's signaling address.
 Media flows over the resulting native WebRTC track, never over CLASP.
 
+One viewer is served at a time. Once a viewer's WebRTC connection is
+established, the robot keeps serving it and ignores other viewers' hellos until
+that viewer disconnects or its session fails. A session that never establishes
+within a short grace window may be handed to a waiting viewer, so a stale viewer
+cannot hold the camera forever. This keeps two viewers from stealing the stream
+from each other in a loop, at the cost that a second operator sees "waiting"
+until the first leaves.
+
 `hello` is an Event rather than a persistent presence Param on purpose. A
 persistent per-session Param would accumulate stale entries (every past console
 session), and the robot would try to start a stream for each ghost on connect.
