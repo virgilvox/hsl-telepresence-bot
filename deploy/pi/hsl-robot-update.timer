@@ -1,0 +1,15 @@
+# Schedule for the telepresence robot self-updater. Runs shortly after boot
+# (once the network is up) and hourly thereafter. Persistent=true catches up on
+# a missed run if the Pi was off. Enable the timer, not the service:
+#   sudo systemctl enable --now hsl-robot-update.timer
+
+[Unit]
+Description=Periodic update check for the HSL telepresence robot agent
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

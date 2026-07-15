@@ -1,14 +1,20 @@
 # Handoff
 
-Last updated 2026-07-11.
+Last updated 2026-07-14.
 
 Current state of the telepresence robot, what is verified, and what to do next.
 
 ## Where things stand
 
-- The robot is a Pi 3B+ named `hslbot` on the local network. The Rust agent runs
-  as the systemd service `hsl-robot`, starts on boot, and reconnects to the
-  public CLASP relay on its own.
+- The robot is a Pi 3B+ named `hslbot` on the local network, running 64-bit
+  Raspberry Pi OS (Debian 13, trixie). The Rust agent runs as the systemd
+  service `hsl-robot`, starts on boot, and reconnects to the public CLASP relay
+  on its own.
+- The Pi now carries a full git clone of `origin/main` at
+  `/home/pi/hsl-telepresence-bot`, and a timer-driven self-updater keeps it on
+  the latest code (see "Self-update"). The installed binary
+  (`/usr/local/bin/hsl-robot`) is built from the current `main` and includes the
+  motor-control fix below.
 - The operator console is a Vue 3 static site in `web/`. It defaults to robot id
   `hslbot` and connects to `wss://relay.clasp.to`. Run it locally with
   `cd web && npm run dev`, or deploy it to DigitalOcean App Platform with
@@ -19,16 +25,16 @@ Current state of the telepresence robot, what is verified, and what to do next.
 
 ## Action items, in order
 
-1. **Redeploy the agent to pick up the motor fix.** The binary currently on the
-   Pi predates the motor-control fix below, so it does not actually drive the
-   motors. Rebuild and reinstall (see "Rebuild and redeploy"). The Pi was
-   offline during this audit, so this step is pending.
-2. **Confirm driving on hardware.** With the wheels clear, drive from the
+1. **Confirm driving on hardware.** With the wheels clear, drive from the
    console and confirm forward, reverse, and turning. This is the one thing the
-   automated tests cannot prove.
-3. **Confirm the video picture renders** in the browser (the robot side of the
+   automated tests cannot prove. The agent now runs the fixed binary, so this is
+   ready to try.
+2. **Confirm the video picture renders** in the browser (the robot side of the
    WebRTC handshake is proven; the browser answer/ICE path needs a real browser
    to confirm the frames paint).
+
+The earlier "redeploy to pick up the motor fix" item is done: the Pi was
+converted to a git clone, rebuilt from `main`, and is running the fixed binary.
 
 ## Motor control audit finding (fixed in code, needs redeploy)
 
@@ -87,7 +93,36 @@ sudo systemctl restart hsl-robot
 ```
 
 Sync source to the Pi with rsync (exclude `target`, `node_modules`, `.git`), or
-`git pull` on the Pi.
+`git pull` on the Pi. Normally you do not need to do this by hand: the
+self-updater below pulls and rebuilds on its own.
+
+## Self-update
+
+The Pi keeps itself current from the git remote. Three pieces, all in
+`deploy/pi/`:
+
+- `update.sh`, installed as `/usr/local/bin/hsl-robot-update`. It fetches
+  `origin/main`, and only when the remote has moved does it `git reset --hard`,
+  rebuild the agent (LTO off, bounded jobs), install the binary, and restart
+  `hsl-robot`. Up to date means it does nothing, so running it often is cheap.
+  Git and the build run as the `pi` user; only the install and restart use root.
+- `hsl-robot-update.service`, a oneshot that runs the script after
+  `network-online.target`.
+- `hsl-robot-update.timer`, which triggers the service 2 minutes after boot and
+  hourly after that (`Persistent=true` catches up a missed run).
+
+Enable the timer, not the service:
+
+```
+sudo install -m 755 deploy/pi/update.sh /usr/local/bin/hsl-robot-update
+sudo cp deploy/pi/hsl-robot-update.service /etc/systemd/system/
+sudo cp deploy/pi/hsl-robot-update.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now hsl-robot-update.timer
+```
+
+Watch it: `journalctl -u hsl-robot-update -f`. Force a check now:
+`sudo systemctl start hsl-robot-update.service`. Pause it:
+`sudo systemctl disable --now hsl-robot-update.timer`.
 
 System dependencies (already installed on `hslbot`): `build-essential`,
 `pkg-config`, `libssl-dev`, `i2c-tools`, `v4l-utils`, and the GStreamer stack

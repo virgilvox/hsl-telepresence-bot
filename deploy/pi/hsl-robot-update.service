@@ -1,0 +1,21 @@
+# Oneshot updater for the telepresence robot agent. Triggered by
+# hsl-robot-update.timer on boot and periodically. Pulls the latest code and,
+# only if it changed, rebuilds and restarts hsl-robot.
+#
+# Install:
+#   sudo install -m 755 deploy/pi/update.sh /usr/local/bin/hsl-robot-update
+#   sudo cp deploy/pi/hsl-robot-update.service /etc/systemd/system/
+#   sudo cp deploy/pi/hsl-robot-update.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now hsl-robot-update.timer
+
+[Unit]
+Description=Update HSL telepresence robot agent to latest code
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: git and the build drop to the pi user inside the script.
+ExecStart=/usr/local/bin/hsl-robot-update
+# A Pi 3 release build is slow; give it room but do not hang forever.
+TimeoutStartSec=3600
