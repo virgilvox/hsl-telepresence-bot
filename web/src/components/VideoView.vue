@@ -37,20 +37,16 @@ onUnmounted(() => {
 })
 
 const stateLabel = {
-  idle: 'No session',
-  waiting: 'Waiting for robot',
-  connecting: 'Negotiating',
-  live: 'Live',
-  failed: 'Connection failed',
+  idle: 'no session',
+  waiting: 'waiting for robot',
+  connecting: 'negotiating',
+  live: 'live',
+  failed: 'connection failed',
 }
 </script>
 
 <template>
-  <section
-    ref="root"
-    class="video panel"
-    :class="[`eye-${eye}`, { fs: isFullscreen }]"
-  >
+  <section ref="root" class="video" :class="[`eye-${eye}`, { fs: isFullscreen }]">
     <video ref="video" autoplay playsinline muted />
 
     <div v-if="state !== 'live'" class="waiting">
@@ -68,16 +64,16 @@ const stateLabel = {
     </div>
 
     <div class="chrome">
-      <span class="badge">
-        <span class="dot" :class="{ live: state === 'live' }" />
+      <span class="tag">
+        <span class="lamp" :class="{ live: state === 'live' }" />
         {{ stateLabel[state] || state }}
       </span>
 
       <div class="right">
         <div class="eyes" role="group" aria-label="Camera view">
-          <button :class="{ active: eye === 'left' }" @click="eye = 'left'">Left</button>
+          <button :class="{ active: eye === 'left' }" @click="eye = 'left'">L</button>
           <button :class="{ active: eye === 'both' }" @click="eye = 'both'">Both</button>
-          <button :class="{ active: eye === 'right' }" @click="eye = 'right'">Right</button>
+          <button :class="{ active: eye === 'right' }" @click="eye = 'right'">R</button>
         </div>
         <button
           v-if="fullscreenSupported"
@@ -102,12 +98,16 @@ const stateLabel = {
 .video {
   position: relative;
   overflow: hidden;
-  background: #0b0c0e;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
   min-height: 0;
 }
 .video.fs {
   border: none;
   border-radius: 0;
+  box-shadow: none;
 }
 video {
   width: 100%;
@@ -127,6 +127,9 @@ video {
 .eye-right video {
   transform: translateX(25%);
 }
+
+/* Nothing to look at yet: say so on the same grid the drive pad uses, so an
+   empty feed still reads as part of the instrument rather than a broken image. */
 .waiting {
   position: absolute;
   inset: 0;
@@ -135,16 +138,20 @@ video {
   align-items: center;
   justify-content: center;
   gap: 0.7rem;
-  color: #6e727a;
-  background: #0b0c0e;
-  font-size: 0.9rem;
+  color: var(--text-faint);
+  background-color: var(--ink);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size);
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
 }
 .big {
-  font-size: 2.4rem;
-  stroke-width: 1.4;
+  font-size: 2rem;
+  stroke-width: 1.25;
 }
 
-/* Floating chrome over the picture. */
 .chrome {
   position: absolute;
   left: 0;
@@ -154,8 +161,7 @@ video {
   align-items: center;
   justify-content: space-between;
   gap: 0.75rem;
-  padding: 0.7rem;
-  background: linear-gradient(to top, rgba(0, 0, 0, 0.55), transparent);
+  padding: 0.6rem;
   pointer-events: none;
 }
 .chrome > * {
@@ -166,60 +172,56 @@ video {
   align-items: center;
   gap: 0.4rem;
 }
-.badge {
+.tag {
   display: inline-flex;
   align-items: center;
   gap: 0.45rem;
-  font-size: 0.75rem;
-  letter-spacing: 0.02em;
-  color: var(--hud-text);
-  background: var(--hud);
-  border: 1px solid var(--hud-border);
-  border-radius: 999px;
-  padding: 0.22rem 0.6rem 0.22rem 0.5rem;
-  backdrop-filter: blur(6px);
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text);
+  background: rgba(26, 26, 26, 0.85);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
 }
 .eyes {
   display: inline-flex;
-  gap: 2px;
-  background: var(--hud);
-  border: 1px solid var(--hud-border);
-  padding: 2px;
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius-sm);
-  backdrop-filter: blur(6px);
+  overflow: hidden;
+  background: rgba(26, 26, 26, 0.85);
 }
 .eyes button {
   border: none;
+  border-right: 1px solid var(--line-strong);
+  border-radius: 0;
   background: transparent;
-  color: var(--hud-dim);
-  padding: 0.22rem 0.55rem;
-  border-radius: 5px;
-  font-size: 0.75rem;
+  color: var(--text-dim);
+  padding: 0.3rem 0.5rem;
+  box-shadow: none;
 }
-.eyes button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.1);
-  color: var(--hud-text);
+.eyes button:last-child {
+  border-right: none;
+}
+.eyes button:active:not(:disabled) {
+  transform: none;
 }
 .eyes button.active {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--hud-text);
+  background: var(--accent-wash);
+  color: var(--accent-bright);
 }
 .fsbtn {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  font-size: 0.95rem;
-  color: var(--hud-dim);
-  background: var(--hud);
-  border-color: var(--hud-border);
-  backdrop-filter: blur(6px);
-}
-.fsbtn:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--hud-text);
-  border-color: var(--hud-border);
+  font-size: 0.9rem;
+  color: var(--text-dim);
+  background: rgba(26, 26, 26, 0.85);
+  border-color: var(--line-strong);
+  box-shadow: none;
 }
 
 /* The fullscreen HUD: corner-anchored, never covering the middle of the
@@ -227,10 +229,10 @@ video {
 .hud {
   position: absolute;
   inset: 0;
-  padding: 1rem;
+  padding: 0.9rem;
   /* Clear the chrome bar along the bottom, so the telemetry and the pad never
-     sit on top of the live badge and the eye selector. */
-  padding-bottom: 3.6rem;
+     sit on top of the live tag and the eye selector. */
+  padding-bottom: 3.4rem;
   display: grid;
   grid-template-columns: auto 1fr auto;
   grid-template-rows: auto 1fr auto;
@@ -257,11 +259,9 @@ video {
   align-self: end;
 }
 .hud :deep(.hud-card) {
-  background: var(--hud);
-  border: 1px solid var(--hud-border);
+  background: rgba(26, 26, 26, 0.88);
+  border: 1px solid var(--line-strong);
   border-radius: var(--radius);
-  padding: 0.7rem 0.8rem;
-  color: var(--hud-text);
-  backdrop-filter: blur(10px);
+  padding: 0.65rem 0.7rem;
 }
 </style>

@@ -2,6 +2,9 @@
 // Deliberately not arbitrated: anyone watching can stop the robot, whether or
 // not they hold the wheel. The robot mirrors the latched state back, so this
 // reflects reality rather than the last thing this console asked for.
+//
+// The only filled control in the interface. Everything else is outlined, so
+// there is never a question about which control is the important one.
 import { computed } from 'vue'
 
 const props = defineProps({
@@ -37,45 +40,54 @@ const label = computed(() => (props.engaged ? 'Release stop' : 'Emergency stop')
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 0.55rem;
-  font-size: 1rem;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-  padding: 0.85rem;
+  gap: 0.5rem;
+  font-size: var(--size-sm);
+  font-weight: 700;
+  letter-spacing: var(--track-wider);
+  padding: 0.8rem;
   color: var(--stop);
-  border-color: var(--stop);
-  background: var(--stop-soft);
+  border-color: var(--stop-dim);
+  background: var(--stop-wash);
+  box-shadow: var(--lift);
 }
 .estop .icon {
-  font-size: 1.25rem;
+  font-size: 1.1rem;
   stroke-width: 2.2;
 }
+.estop:hover:not(:disabled) {
+  background: rgba(239, 68, 68, 0.22);
+  border-color: var(--stop);
+  color: var(--stop);
+}
+.estop:active:not(:disabled) {
+  transform: translate(4px, 4px);
+  box-shadow: none;
+}
+
+/* Latched: the robot is actually held. Filled, so it is unmistakable across
+   the room. */
 .estop.engaged {
   color: #fff;
   background: var(--stop);
   border-color: var(--stop);
 }
-.estop:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--stop) 20%, var(--surface));
-}
 .estop.engaged:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--stop) 85%, black);
+  background: var(--stop-dim);
+  border-color: var(--stop-dim);
+  color: #fff;
 }
 
-/* Over the video the stop must read as the most solid thing on screen, so it
-   stays filled rather than tinted. */
 .estop.compact {
   width: auto;
-  padding: 0.5rem 0.8rem;
-  font-size: 0.85rem;
+  padding: 0.5rem 0.75rem;
   color: #fff;
-  background: color-mix(in srgb, var(--stop) 88%, black);
-  border-color: color-mix(in srgb, var(--stop) 70%, black);
+  background: var(--stop-dim);
+  border-color: var(--stop);
 }
 .estop.compact:hover:not(:disabled) {
   background: var(--stop);
 }
 .estop.compact .icon {
-  font-size: 1.05rem;
+  font-size: 1rem;
 }
 </style>

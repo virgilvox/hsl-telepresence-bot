@@ -69,6 +69,11 @@ watch(
 
 const video = ref(null)
 
+const relayHost = computed(() => settings.url.replace(/^wss?:\/\//, '').replace(/\/$/, ''))
+const protocolLabel = computed(() =>
+  connected.value && arbitrated.value ? `proto ${Number(status.protocol)}` : 'proto 1',
+)
+
 function onKey(event) {
   if (event.key !== 'f' && event.key !== 'F') return
   if (event.metaKey || event.ctrlKey || event.altKey) return
@@ -133,7 +138,7 @@ function saveSettings() {
     />
 
     <main class="layout">
-      <VideoView ref="video" class="video-slot" :stream="remoteStream" :state="videoState">
+      <VideoView ref="video" class="feed" :stream="remoteStream" :state="videoState">
         <!-- In fullscreen the same controls come along, anchored to the
              corners, so going fullscreen never costs you the stop. -->
         <template #hud>
@@ -173,32 +178,68 @@ function saveSettings() {
         </template>
       </VideoView>
 
-      <aside class="sidebar">
+      <aside class="rail">
         <EStopButton :engaged="estopEngaged" :disabled="!connected" @toggle="control.setEstop" />
-        <ControlPanel
-          class="panel"
-          :driver="driver"
-          :my-session="sessionId"
-          :viewers="viewers"
-          :arbitrated="arbitrated"
-          :connected="connected"
-          :disabled="!connected"
-          @claim="control.claimControl"
-          @release="control.releaseControl"
-        />
-        <DrivePad class="panel" :drive="drive" :disabled="!mayDrive" />
-        <TelemetryPanel
-          class="panel"
-          :status="status"
-          :motors="motors"
-          :last-seen="lastSeen"
-          :online="online"
-        />
-        <p class="hint">
-          Drag the pad or hold WASD / arrows. Release to coast. <kbd>F</kbd> for fullscreen.
-        </p>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="tick" />
+            <h2>Control</h2>
+          </div>
+          <div class="panel-body">
+            <ControlPanel
+              :driver="driver"
+              :my-session="sessionId"
+              :viewers="viewers"
+              :arbitrated="arbitrated"
+              :connected="connected"
+              :disabled="!connected"
+              @claim="control.claimControl"
+              @release="control.releaseControl"
+            />
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="tick" />
+            <h2>Drive</h2>
+            <span class="aside">{{ mayDrive ? 'armed' : 'locked' }}</span>
+          </div>
+          <div class="panel-body">
+            <DrivePad :drive="drive" :disabled="!mayDrive" />
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <span class="tick" />
+            <h2>Telemetry</h2>
+          </div>
+          <div class="panel-body">
+            <TelemetryPanel
+              :status="status"
+              :motors="motors"
+              :last-seen="lastSeen"
+              :online="online"
+            />
+          </div>
+        </section>
       </aside>
     </main>
+
+    <footer class="statusbar">
+      <span class="lamp" :class="{ live: connected && online, busy: connecting }" />
+      <span>{{ relayHost }}</span>
+      <span class="sep" />
+      <span>{{ protocolLabel }}</span>
+      <span class="sep" />
+      <span>{{ videoState }}</span>
+      <span class="spacer" />
+      <span class="hint">drag pad or hold WASD / arrows</span>
+      <span class="sep" />
+      <span class="hint"><kbd>F</kbd> fullscreen</span>
+    </footer>
   </div>
 </template>
 
@@ -206,44 +247,63 @@ function saveSettings() {
 .app {
   display: flex;
   flex-direction: column;
-  gap: 0.7rem;
-  padding: 0.7rem;
   height: 100vh;
   height: 100dvh;
-  max-width: 1500px;
-  margin: 0 auto;
 }
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) 296px;
   gap: 0.7rem;
+  padding: 0.7rem;
   flex: 1;
   min-height: 0;
 }
-.video-slot {
+.feed {
   min-height: 0;
 }
-.sidebar {
+.rail {
   display: flex;
   flex-direction: column;
   gap: 0.7rem;
   min-height: 0;
   overflow-y: auto;
 }
-.hint {
-  margin: 0;
+
+/* Bottom rail of standing facts, the way an editor keeps its status line. */
+.statusbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  height: var(--statusbar-h);
+  flex: none;
+  padding: 0 0.75rem;
+  border-top: 1px solid var(--line);
+  background: var(--raised);
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
   color: var(--text-faint);
-  font-size: 0.73rem;
-  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.sep {
+  width: 1px;
+  height: 12px;
+  background: var(--line);
+  flex: none;
+}
+.spacer {
+  flex: 1;
 }
 kbd {
-  font-family: var(--mono);
-  font-size: 0.9em;
-  border: 1px solid var(--border);
-  border-bottom-width: 2px;
-  border-radius: 4px;
+  font-family: inherit;
+  font-size: 0.95em;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
   padding: 0 0.25em;
+  color: var(--text-dim);
 }
+
 @media (max-width: 900px) {
   .app {
     height: auto;
@@ -252,11 +312,14 @@ kbd {
   .layout {
     grid-template-columns: 1fr;
   }
-  .video-slot {
+  .feed {
     min-height: 46vh;
   }
-  .sidebar {
+  .rail {
     overflow: visible;
+  }
+  .statusbar .hint {
+    display: none;
   }
 }
 </style>

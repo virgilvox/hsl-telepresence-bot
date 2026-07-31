@@ -2,6 +2,9 @@
 // Presentational. All input handling and the send loop live in useDrive so the
 // pad can be drawn twice (sidebar and fullscreen HUD) without two of them
 // fighting over the keyboard.
+//
+// The field borrows latch.design's node canvas: the same 20px grid on the same
+// near-black, so the knob reads as something sitting on a work surface.
 import { computed } from 'vue'
 
 const props = defineProps({
@@ -11,174 +14,158 @@ const props = defineProps({
 })
 
 const knob = computed(() => props.drive.knob)
-const lit = (code) => props.drive.held.has(code)
+const lit = (...codes) => codes.some((c) => props.drive.held.has(c))
+const fmt = (v) => (v < 0 ? '' : '+') + v.toFixed(2)
 </script>
 
 <template>
   <section class="drive" :class="{ compact, disabled }">
-    <p v-if="!compact" class="panel-title">Drive</p>
-
     <div
-      class="pad"
+      class="field"
       @pointerdown="drive.onPointerDown"
       @pointermove="drive.onPointerMove"
       @pointerup="drive.onPointerUp"
       @pointercancel="drive.onPointerUp"
     >
-      <div class="ring" />
-      <div class="crosshair v" />
-      <div class="crosshair h" />
+      <div class="axis v" />
+      <div class="axis h" />
+      <!-- Full deflection. The knob's travel stops here rather than running
+           off the edge of the field. -->
+      <div class="limit" />
       <div
         class="knob"
         :class="{ active: drive.dragging || drive.held.size > 0 }"
-        :style="{ left: `${(knob.x + 1) * 50}%`, top: `${(1 - knob.y) * 50}%` }"
+        :style="{ left: `${50 + knob.x * 41}%`, top: `${50 - knob.y * 41}%` }"
       />
     </div>
 
     <div class="keys" aria-hidden="true">
-      <span class="key" :class="{ lit: lit('KeyA') || lit('ArrowLeft') }">A</span>
-      <span class="key" :class="{ lit: lit('KeyS') || lit('ArrowDown') }">S</span>
-      <span class="key" :class="{ lit: lit('KeyW') || lit('ArrowUp') }">W</span>
-      <span class="key" :class="{ lit: lit('KeyD') || lit('ArrowRight') }">D</span>
+      <span class="key" :class="{ lit: lit('KeyW', 'ArrowUp') }">W</span>
+      <span class="key" :class="{ lit: lit('KeyA', 'ArrowLeft') }">A</span>
+      <span class="key" :class="{ lit: lit('KeyS', 'ArrowDown') }">S</span>
+      <span class="key" :class="{ lit: lit('KeyD', 'ArrowRight') }">D</span>
     </div>
 
-    <div class="readout mono">
-      <span><i>thr</i>{{ knob.y.toFixed(2).padStart(5, ' ') }}</span>
-      <span><i>str</i>{{ knob.x.toFixed(2).padStart(5, ' ') }}</span>
-    </div>
+    <dl class="readout num">
+      <div><dt>thr</dt><dd :class="{ hot: knob.y !== 0 }">{{ fmt(knob.y) }}</dd></div>
+      <div><dt>str</dt><dd :class="{ hot: knob.x !== 0 }">{{ fmt(knob.x) }}</dd></div>
+    </dl>
   </section>
 </template>
 
 <style scoped>
 .drive {
-  padding: 0.8rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
 }
-.drive.compact {
-  padding: 0;
-}
-.pad {
+.field {
   position: relative;
   aspect-ratio: 1;
   width: 100%;
-  max-width: 200px;
+  max-width: 190px;
   margin: 0 auto;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 12px;
+  background-color: var(--ink);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: var(--grid-size) var(--grid-size);
+  background-position: center center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   touch-action: none;
   overflow: hidden;
-  cursor: grab;
+  cursor: crosshair;
 }
-.compact .pad {
-  max-width: 150px;
-  background: rgba(0, 0, 0, 0.3);
-  border-color: var(--hud-border);
+.compact .field {
+  max-width: 132px;
 }
-.disabled .pad {
-  opacity: 0.4;
+.disabled .field {
+  opacity: 0.35;
   cursor: not-allowed;
 }
-.pad:active {
-  cursor: grabbing;
-}
-.ring {
+.axis {
   position: absolute;
-  inset: 16%;
-  border: 1px solid var(--border);
-  border-radius: 50%;
-  opacity: 0.7;
+  background: var(--line-strong);
 }
-.compact .ring,
-.compact .crosshair {
-  border-color: var(--hud-border);
-  background: var(--hud-border);
-}
-.compact .ring {
-  background: none;
-}
-.crosshair {
-  position: absolute;
-  background: var(--border);
-}
-.crosshair.v {
+.axis.v {
   left: 50%;
-  top: 6%;
-  bottom: 6%;
+  top: 0;
+  bottom: 0;
   width: 1px;
-  transform: translateX(-0.5px);
 }
-.crosshair.h {
+.axis.h {
   top: 50%;
-  left: 6%;
-  right: 6%;
+  left: 0;
+  right: 0;
   height: 1px;
-  transform: translateY(-0.5px);
+}
+.limit {
+  position: absolute;
+  inset: 9%;
+  border: 1px dashed var(--line-strong);
+  opacity: 0.6;
 }
 .knob {
   position: absolute;
-  width: 19%;
-  height: 19%;
-  border-radius: 50%;
+  width: 18%;
+  height: 18%;
   background: var(--accent);
+  border: 1px solid var(--accent-bright);
+  border-radius: var(--radius-sm);
   transform: translate(-50%, -50%);
-  transition: box-shadow 120ms ease;
+  box-shadow: var(--lift-sm);
+  transition: box-shadow 100ms ease;
 }
 .knob.active {
-  box-shadow: 0 0 0 7px var(--accent-soft);
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 5px var(--accent-wash), var(--lift-sm);
 }
-.compact .knob.active {
-  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent);
-}
+
 .keys {
   display: flex;
   justify-content: center;
   gap: 3px;
-  margin-top: 0.6rem;
 }
 .key {
-  font-family: var(--mono);
-  font-size: 0.65rem;
+  font-size: var(--size-xs);
+  font-weight: 700;
   line-height: 1;
-  padding: 0.28rem 0.4rem;
-  min-width: 1.5rem;
+  padding: 0.3rem 0;
+  width: 1.75rem;
   text-align: center;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
   color: var(--text-faint);
-  transition: color 90ms ease, border-color 90ms ease, background 90ms ease;
-}
-.compact .key {
-  border-color: var(--hud-border);
-  color: var(--hud-dim);
+  transition: color 80ms ease, border-color 80ms ease, background 80ms ease;
 }
 .key.lit {
-  color: var(--accent);
+  color: var(--ink);
+  background: var(--accent);
   border-color: var(--accent);
-  background: var(--accent-soft);
 }
-.compact .key.lit {
-  background: transparent;
-}
+
 .readout {
   display: flex;
   justify-content: center;
-  gap: 1rem;
-  margin-top: 0.5rem;
-  color: var(--text-dim);
-  font-size: 0.8rem;
-  white-space: pre;
+  gap: 0.75rem;
+  margin: 0;
+  font-size: var(--size-xs);
 }
-.compact .readout {
-  color: var(--hud-dim);
-  font-size: 0.72rem;
+.readout > div {
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
 }
-.readout i {
-  font-style: normal;
+dt {
   color: var(--text-faint);
-  margin-right: 0.4rem;
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
 }
-.compact .readout i {
-  color: var(--hud-dim);
-  opacity: 0.7;
+dd {
+  margin: 0;
+  color: var(--text-dim);
+}
+dd.hot {
+  color: var(--accent-bright);
 }
 </style>

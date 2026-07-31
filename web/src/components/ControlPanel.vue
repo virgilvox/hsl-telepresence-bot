@@ -24,38 +24,34 @@ const isMine = computed(
 const isFree = computed(() => !props.driver?.session)
 
 const label = computed(() => {
-  if (!props.connected) return 'Not connected'
-  if (!props.arbitrated) return 'Single operator robot'
-  if (isMine.value) return 'You have control'
-  if (isFree.value) return 'Wheel is free'
-  return `${props.driver.name || 'Someone'} has control`
+  if (!props.connected) return 'not connected'
+  if (!props.arbitrated) return 'single operator'
+  if (isMine.value) return 'you have control'
+  if (isFree.value) return 'wheel is free'
+  return `${props.driver.name || 'someone'} has control`
 })
 
 const action = computed(() => {
-  if (isMine.value) return { text: 'Release', event: 'release' }
-  if (isFree.value) return { text: 'Take control', event: 'claim' }
-  return { text: 'Take over', event: 'claim' }
+  if (isMine.value) return { text: 'Release', event: 'release', primary: false }
+  if (isFree.value) return { text: 'Take control', event: 'claim', primary: true }
+  return { text: 'Take over', event: 'claim', primary: true }
 })
-
-const watchers = computed(() =>
-  typeof props.viewers === 'number' ? `${props.viewers} watching` : null,
-)
 </script>
 
 <template>
-  <section class="control" :class="{ compact, mine: isMine, free: isFree }">
-    <p v-if="!compact" class="panel-title">Control</p>
-
-    <div class="line">
-      <span class="dot" :class="{ live: isMine, busy: !isMine && !isFree }" />
-      <span class="who">{{ label }}</span>
-      <span v-if="watchers" class="watchers mono">{{ watchers }}</span>
+  <section class="control" :class="{ compact }">
+    <div class="who">
+      <span class="lamp" :class="{ live: isMine, busy: !isMine && !isFree && connected }" />
+      <span class="label">{{ label }}</span>
+      <span v-if="typeof viewers === 'number'" class="badge num watchers">
+        {{ viewers }} watching
+      </span>
     </div>
 
     <button
       v-if="arbitrated"
       class="act"
-      :class="{ primary: !isMine }"
+      :class="{ primary: action.primary }"
       :disabled="disabled"
       @click="emit(action.event)"
     >
@@ -66,64 +62,42 @@ const watchers = computed(() =>
 
 <style scoped>
 .control {
-  padding: 0.8rem;
-}
-.control.compact {
-  padding: 0;
   display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.compact {
+  flex-direction: row;
   align-items: center;
   gap: 0.6rem;
 }
-.line {
+.who {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.88rem;
   min-width: 0;
 }
-.compact .line {
-  font-size: 0.8rem;
-  color: var(--hud-text);
-}
-.who {
+.label {
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-bright);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .watchers {
   margin-left: auto;
-  font-size: 0.72rem;
   color: var(--text-faint);
-  white-space: nowrap;
 }
 .compact .watchers {
-  color: var(--hud-dim);
+  margin-left: 0.25rem;
 }
 .act {
   width: 100%;
-  margin-top: 0.65rem;
 }
 .compact .act {
   width: auto;
-  margin: 0;
-  padding: 0.25rem 0.55rem;
-  font-size: 0.75rem;
-  background: transparent;
-  color: var(--hud-text);
-  border-color: var(--hud-border);
-}
-.compact .act:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
-}
-.act.primary {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.act.primary:hover:not(:disabled) {
-  background: var(--accent-soft);
-}
-.compact .act.primary {
-  color: var(--accent);
-  border-color: color-mix(in srgb, var(--accent) 65%, transparent);
+  margin-left: auto;
 }
 </style>

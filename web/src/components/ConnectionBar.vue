@@ -1,7 +1,7 @@
 <script setup>
-// Identity and link state. The connection fields matter once, at the start of a
-// session, so they fold away as soon as the console is connected and the robot
-// chip takes their place.
+// Identity and link state, in a fixed-height strip. The connection fields
+// matter once, at the start of a session, so they fold away as soon as the
+// console is connected and the robot readout takes their place.
 import { computed, ref, watch } from 'vue'
 
 const props = defineProps({
@@ -25,9 +25,9 @@ watch(
 )
 
 const linkState = computed(() => {
-  if (props.connecting) return 'Connecting'
-  if (!props.connected) return 'Offline'
-  return props.online ? 'Robot online' : 'Relay only'
+  if (props.connecting) return 'linking'
+  if (!props.connected) return 'offline'
+  return props.online ? 'robot online' : 'relay only'
 })
 
 function update(key, value) {
@@ -36,30 +36,31 @@ function update(key, value) {
 </script>
 
 <template>
-  <header class="bar panel">
-    <div class="top">
+  <header class="bar">
+    <div class="strip">
       <div class="brand">
         <svg class="icon logo" viewBox="0 0 24 24" aria-hidden="true">
-          <rect x="4" y="8" width="16" height="10" rx="2" />
+          <rect x="4" y="8" width="16" height="10" rx="1" />
           <path d="M9 8V6a3 3 0 0 1 6 0v2" />
-          <circle cx="9" cy="13" r="1.2" fill="currentColor" stroke="none" />
-          <circle cx="15" cy="13" r="1.2" fill="currentColor" stroke="none" />
+          <rect x="8" y="12" width="2" height="2" fill="currentColor" stroke="none" />
+          <rect x="14" y="12" width="2" height="2" fill="currentColor" stroke="none" />
         </svg>
-        <span class="title">Telepresence</span>
+        <span class="name">Telepresence</span>
       </div>
 
-      <div class="chip" :title="linkState">
+      <span class="rule" />
+
+      <div class="readout">
         <span
-          class="dot"
+          class="lamp"
           :class="{ live: connected && online, busy: connecting || (connected && !online) }"
         />
-        <span class="robot mono">{{ settings.robotId || 'no robot' }}</span>
-        <span class="sep">/</span>
+        <span class="robot">{{ settings.robotId || 'no robot' }}</span>
         <span class="state">{{ linkState }}</span>
       </div>
 
       <div class="actions">
-        <span v-if="sessionId" class="session mono" :title="`Session ${sessionId}`">
+        <span v-if="sessionId" class="session num" :title="`Session ${sessionId}`">
           {{ sessionId.slice(0, 8) }}
         </span>
         <button
@@ -77,8 +78,8 @@ function update(key, value) {
             />
           </svg>
         </button>
-        <button v-if="!connected" class="go" :disabled="connecting" @click="emit('connect')">
-          {{ connecting ? 'Connecting' : 'Connect' }}
+        <button v-if="!connected" class="primary" :disabled="connecting" @click="emit('connect')">
+          {{ connecting ? 'Linking' : 'Connect' }}
         </button>
         <button v-else @click="emit('disconnect')">Disconnect</button>
       </div>
@@ -130,48 +131,61 @@ function update(key, value) {
 
 <style scoped>
 .bar {
-  padding: 0.55rem 0.7rem;
+  border-bottom: 1px solid var(--line);
+  background: var(--raised);
 }
-.top {
+.strip {
   display: flex;
   align-items: center;
-  gap: 0.8rem;
+  gap: 0.75rem;
+  height: var(--header-h);
+  padding: 0 0.75rem;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  font-weight: 600;
-  font-size: 0.92rem;
+  gap: 0.5rem;
   white-space: nowrap;
 }
 .logo {
-  font-size: 1.3rem;
+  font-size: 1.25rem;
   color: var(--accent);
 }
-.chip {
+.name {
+  font-size: var(--size-sm);
+  font-weight: 700;
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text-bright);
+}
+.rule {
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  flex: none;
+}
+.readout {
   display: flex;
   align-items: center;
-  gap: 0.45rem;
-  font-size: 0.78rem;
-  padding: 0.25rem 0.6rem;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--surface-2);
+  gap: 0.5rem;
   min-width: 0;
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
 }
 .robot {
-  font-size: 0.78rem;
+  color: var(--text-bright);
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.sep {
-  color: var(--text-faint);
-}
 .state {
-  color: var(--text-dim);
+  color: var(--text-faint);
   white-space: nowrap;
+}
+.state::before {
+  content: '/ ';
 }
 .actions {
   display: flex;
@@ -180,58 +194,54 @@ function update(key, value) {
   margin-left: auto;
 }
 .session {
-  font-size: 0.72rem;
+  font-size: var(--size-xs);
   color: var(--text-faint);
+  letter-spacing: var(--track-wide);
 }
 .gear {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 28px;
+  height: 28px;
   padding: 0;
-  font-size: 1rem;
-  color: var(--text-dim);
+  font-size: 0.95rem;
 }
 .gear.on {
-  color: var(--accent);
+  color: var(--accent-bright);
   border-color: var(--accent);
-}
-.go {
-  border-color: var(--accent);
-  color: var(--accent);
-}
-.go:hover:not(:disabled) {
-  background: var(--accent-soft);
 }
 .fields {
   display: grid;
   grid-template-columns: minmax(7rem, 1fr) minmax(12rem, 2fr) minmax(7rem, 1fr) minmax(7rem, 1fr);
   gap: 0.6rem;
-  margin-top: 0.6rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--border);
+  padding: 0 0.75rem 0.7rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.7rem;
 }
 label {
   display: flex;
   flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.66rem;
+  gap: 0.3rem;
+  font-size: var(--size-xs);
   color: var(--text-faint);
-  letter-spacing: 0.06em;
+  letter-spacing: var(--track-wider);
   text-transform: uppercase;
   font-weight: 600;
   min-width: 0;
 }
 .error {
-  margin: 0.55rem 0 0;
+  margin: 0;
+  padding: 0.5rem 0.75rem;
+  border-top: 1px solid var(--stop-dim);
+  background: var(--stop-wash);
   color: var(--stop);
-  font-size: 0.82rem;
+  font-size: var(--size-sm);
 }
-@media (max-width: 760px) {
+@media (max-width: 780px) {
   .fields {
     grid-template-columns: 1fr 1fr;
   }
-  .chip .state {
+  .state {
     display: none;
   }
 }
