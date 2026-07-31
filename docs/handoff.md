@@ -53,14 +53,25 @@ it has not heard from in 20 s. That is what frees a slot when a tab closes,
 without waiting on an ICE timeout, and it is why every viewer reattaches by
 itself after a robot restart.
 
-**Driving** is arbitrated by the robot in `robot/src/control.rs`. Driving a free
-wheel claims it, a claim always displaces the current holder, and the lease
-lapses 8 s after the holder's last command. A console that holds the wheel
-re-sends its claim every 3 s, so an open console keeps control and a closed one
-frees it. Commands from anyone else are dropped in `link.rs` before they reach
-the motors or reset the drive watchdog. **The e-stop is not arbitrated**: anyone
-watching can stop the robot, which is the point, because the person who can see
-the collision coming is not always the one holding the wheel.
+**Driving** is arbitrated by the robot in `robot/src/control.rs`, and taking
+turns needs no buttons. Driving a free wheel claims it (named from the drive
+command itself), and the lease lapses 1.5 s after the holder's last command,
+which is about the length of a pause between deliberate movements. So the wheel
+belongs to whoever is currently driving; the moment they stop, the next person
+just starts. **Take over** is the only button, and it only appears when someone
+else is actually driving. Commands from anyone else are dropped in `link.rs`
+before they reach the motors or reset the drive watchdog. **The e-stop is not
+arbitrated**: anyone watching can stop the robot, which is the point, because
+the person who can see the collision coming is not always the one holding the
+wheel.
+
+**Drive commands** are sent on change and then repeated every 150 ms only while
+the robot is moving, rather than sampled at a fixed rate. Pressing a key puts a
+command on the wire in that event handler instead of up to a tick later, and
+letting go sends one zero frame and then goes silent. The repeat exists so that
+silence means something: it is what lets the 400 ms watchdog coast the robot
+when an operator's network drops or their tab dies mid-drive, which a plain
+press/release event pair cannot do on a best-effort Stream.
 
 `status/protocol` (2) is how a console knows the robot arbitrates. An older robot
 does not publish it, and the console then lets anyone drive rather than waiting

@@ -16,7 +16,7 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['claim', 'release'])
+const emit = defineEmits(['claim'])
 
 const isMine = computed(
   () => Boolean(props.driver?.session) && props.driver.session === props.mySession,
@@ -26,16 +26,17 @@ const isFree = computed(() => !props.driver?.session)
 const label = computed(() => {
   if (!props.connected) return 'not connected'
   if (!props.arbitrated) return 'single operator'
-  if (isMine.value) return 'you have control'
+  if (isMine.value) return 'you are driving'
   if (isFree.value) return 'wheel is free'
-  return `${props.driver.name || 'someone'} has control`
+  return `${props.driver.name || 'someone'} is driving`
 })
 
-const action = computed(() => {
-  if (isMine.value) return { text: 'Release', event: 'release', primary: false }
-  if (isFree.value) return { text: 'Take control', event: 'claim', primary: true }
-  return { text: 'Take over', event: 'claim', primary: true }
-})
+// The only button here, and only when there is somebody to take the wheel
+// from. A free wheel needs no ceremony: just drive. Handing it back needs none
+// either, because the lease lapses a moment after you stop.
+const canTakeOver = computed(
+  () => props.arbitrated && props.connected && !isMine.value && !isFree.value,
+)
 </script>
 
 <template>
@@ -48,15 +49,12 @@ const action = computed(() => {
       </span>
     </div>
 
-    <button
-      v-if="arbitrated"
-      class="act"
-      :class="{ primary: action.primary }"
-      :disabled="disabled"
-      @click="emit(action.event)"
-    >
-      {{ action.text }}
+    <button v-if="canTakeOver" class="act primary" :disabled="disabled" @click="emit('claim')">
+      Take over
     </button>
+    <p v-else-if="arbitrated && connected && isFree && !compact" class="hint">
+      hold WASD or drag the pad to take the wheel
+    </p>
   </section>
 </template>
 
@@ -99,5 +97,11 @@ const action = computed(() => {
 .compact .act {
   width: auto;
   margin-left: auto;
+}
+.hint {
+  margin: 0;
+  font-size: var(--size-xs);
+  color: var(--text-faint);
+  letter-spacing: var(--track-wide);
 }
 </style>

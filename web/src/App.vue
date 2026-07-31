@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import ConnectionBar from './components/ConnectionBar.vue'
 import VideoView from './components/VideoView.vue'
 import DrivePad from './components/DrivePad.vue'
@@ -44,28 +44,10 @@ const mayDrive = computed(
   () => connected.value && (!arbitrated.value || isDriver.value || wheelFree.value),
 )
 
-const drive = useDrive(control, {
-  enabled: mayDrive,
-  // Touching the controls with a free wheel takes it, so a lone operator never
-  // has to ask. Taking it from someone else is always an explicit button.
-  onEngage: () => {
-    if (arbitrated.value && !isDriver.value) control.claimControl()
-  },
-})
-
-// Hold the wheel while this console is open. The robot expires a lease that
-// stops being renewed, which is what frees the wheel when someone closes their
-// tab; without this heartbeat an operator who took control and then paused to
-// look at something would silently lose it after a few seconds.
-let holdTimer = null
-watch(
-  isDriver,
-  (mine) => {
-    clearInterval(holdTimer)
-    holdTimer = mine ? setInterval(() => control.claimControl(), 3000) : null
-  },
-  { immediate: true },
-)
+// Driving a free wheel takes it, and the drive command carries the operator's
+// name, so nothing has to be claimed up front. The only explicit claim left is
+// Take over, for grabbing the wheel from someone mid-drive.
+const drive = useDrive(control, { enabled: mayDrive })
 
 const video = ref(null)
 
@@ -84,10 +66,7 @@ function onKey(event) {
 }
 
 onMounted(() => window.addEventListener('keydown', onKey))
-onUnmounted(() => {
-  window.removeEventListener('keydown', onKey)
-  clearInterval(holdTimer)
-})
+onUnmounted(() => window.removeEventListener('keydown', onKey))
 
 function onConnect() {
   saveSettings()
@@ -152,7 +131,6 @@ function saveSettings() {
               :connected="connected"
               :disabled="!connected"
               @claim="control.claimControl"
-              @release="control.releaseControl"
             />
           </div>
           <div class="hud-tr">
@@ -195,7 +173,6 @@ function saveSettings() {
               :connected="connected"
               :disabled="!connected"
               @claim="control.claimControl"
-              @release="control.releaseControl"
             />
           </div>
         </section>

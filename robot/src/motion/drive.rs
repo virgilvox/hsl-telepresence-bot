@@ -224,6 +224,7 @@ mod tests {
             seq: 0,
             ts: 0,
             session: "tester".into(),
+            name: "tester".into(),
         }))
         .unwrap();
         speeds.changed().await.unwrap();
@@ -241,6 +242,7 @@ mod tests {
             seq: 1,
             ts: 0,
             session: "tester".into(),
+            name: "tester".into(),
         }))
         .unwrap();
         tokio::time::sleep(Duration::from_millis(30)).await;
@@ -254,6 +256,7 @@ mod tests {
             seq: 2,
             ts: 0,
             session: "tester".into(),
+            name: "tester".into(),
         }))
         .unwrap();
         speeds.changed().await.unwrap();

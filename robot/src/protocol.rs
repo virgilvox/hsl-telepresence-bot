@@ -114,6 +114,12 @@ pub struct DriveCommand {
     /// the arbiter treats as one anonymous operator rather than rejecting.
     #[serde(default)]
     pub session: String,
+    /// Display name of the operator, carried here so that taking a free wheel
+    /// by simply driving still names the driver correctly. Sending it out of
+    /// band would race the drive itself, and the other consoles would show the
+    /// new driver as "operator" until the two messages settled.
+    #[serde(default)]
+    pub name: String,
 }
 
 /// Deserialize a `u64` from any JSON number, integer or float. `Date.now()` and

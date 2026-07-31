@@ -7,13 +7,17 @@
 //!
 //! The rules, all in one place:
 //!
-//!   - An explicit claim always wins. Taking over from someone is a social
-//!     problem, not a protocol one, and a lease nobody can break is worse on a
-//!     shared robot than an occasional rude handoff.
-//!   - Driving while the wheel is free claims it implicitly, so a lone operator
-//!     never has to ask for permission.
-//!   - The lease lapses on its own after `LEASE_TIMEOUT` without a drive
-//!     command, which is what frees the wheel after someone walks away.
+//!   - Driving while the wheel is free claims it implicitly, so nobody ever
+//!     asks for permission.
+//!   - The lease lapses after `LEASE_TIMEOUT` without a drive command, which is
+//!     about as long as a pause between deliberate movements. In practice that
+//!     means the wheel belongs to whoever is currently driving, and the moment
+//!     they stop, the next person can simply start. Taking turns needs no
+//!     buttons at all.
+//!   - An explicit claim still wins immediately, for grabbing the wheel from
+//!     someone mid-drive. Taking over is a social problem, not a protocol one,
+//!     and a lease nobody can break is worse on a shared robot than an
+//!     occasional rude handoff.
 //!   - The e-stop is deliberately *not* arbitrated. Anyone watching can stop
 //!     the robot at any time, whether or not they hold the wheel.
 //!
@@ -29,13 +33,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
-/// How long the wheel stays held after the driver's last command. Long enough
-/// to survive a brief network stall mid-drive, short enough that the next
-/// person is not left waiting after someone wanders off.
-pub const LEASE_TIMEOUT: Duration = Duration::from_secs(8);
+/// How long the wheel stays held after the driver's last command.
+///
+/// This is deliberately about the length of a pause between two deliberate
+/// movements, not the length of a session. The console repeats the current
+/// demand every 150 ms while the robot is moving, so an active driver renews
+/// this many times over; letting go of the controls frees the wheel almost at
+/// once, and the next person takes their turn by simply driving. Longer, and
+/// somebody has to ask for a wheel nobody is using.
+pub const LEASE_TIMEOUT: Duration = Duration::from_millis(1500);
 
-/// Name recorded for an operator that drove without ever introducing itself.
-/// Consoles predating multi-operator support never send a claim.
+/// Name recorded for an operator that never introduced itself. Consoles
+/// predating multi-operator support send neither a name nor a session.
 const ANONYMOUS: &str = "operator";
 
 struct State {
@@ -77,8 +86,8 @@ impl Arbiter {
 
     /// Should a drive command from `session` be obeyed? Renews the lease when
     /// it should, and takes a free wheel on the operator's behalf.
-    pub fn accepts(&self, session: &str) -> bool {
-        self.accepts_at(session, Instant::now())
+    pub fn accepts(&self, session: &str, name: &str) -> bool {
+        self.accepts_at(session, name, Instant::now())
     }
 
     /// Drop the lease if the holder has gone quiet. Returns true if it lapsed.
@@ -127,7 +136,7 @@ impl Arbiter {
         released
     }
 
-    pub fn accepts_at(&self, session: &str, now: Instant) -> bool {
+    pub fn accepts_at(&self, session: &str, name: &str, now: Instant) -> bool {
         // Expiring first means a lapsed lease is picked up by this very
         // command rather than a tick later.
         self.expire_at(now);
@@ -143,7 +152,7 @@ impl Arbiter {
                 None => {
                     let driver = Driver {
                         session: session.to_string(),
-                        name: ANONYMOUS.to_string(),
+                        name: display_name(name),
                     };
                     state.driver = Some(driver.clone());
                     state.touched = now;
@@ -152,7 +161,7 @@ impl Arbiter {
             }
         };
         if let Some(driver) = granted {
-            tracing::info!(session = %driver.session, "wheel taken by first driver");
+            tracing::info!(session = %driver.session, name = %driver.name, "wheel taken by driving");
             self.publish(Some(driver));
         }
         true
@@ -185,7 +194,8 @@ impl Arbiter {
 
     fn publish(&self, driver: Option<Driver>) {
         // Only wakes the status task when the holder actually changed, so a
-        // driver renewing at 15 Hz does not republish a Param at 15 Hz.
+        // driver renewing several times a second does not republish a Param
+        // several times a second.
         self.tx.send_if_modified(|current| {
             if *current == driver {
                 false
@@ -261,7 +271,7 @@ mod tests {
     fn free_wheel_is_taken_by_the_first_driver() {
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("alice", t));
+        assert!(a.accepts_at("alice", "", t));
         assert_eq!(a.current().unwrap().session, "alice");
     }
 
@@ -269,33 +279,33 @@ mod tests {
     fn a_second_operator_is_ignored_while_the_first_drives() {
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("alice", t));
-        assert!(!a.accepts_at("bob", t));
+        assert!(a.accepts_at("alice", "", t));
+        assert!(!a.accepts_at("bob", "", t));
         // Alice keeps the wheel by driving, so Bob stays locked out even past
         // the lease window.
         let later = t + LEASE_TIMEOUT * 2;
-        assert!(a.accepts_at("alice", later));
-        assert!(!a.accepts_at("bob", later));
+        assert!(a.accepts_at("alice", "", later));
+        assert!(!a.accepts_at("bob", "", later));
     }
 
     #[test]
     fn the_lease_lapses_when_the_driver_goes_quiet() {
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("alice", t));
+        assert!(a.accepts_at("alice", "", t));
         assert!(!a.expire_at(t + LEASE_TIMEOUT / 2));
         assert!(a.expire_at(t + LEASE_TIMEOUT));
         assert!(a.current().is_none());
-        assert!(a.accepts_at("bob", t + LEASE_TIMEOUT));
+        assert!(a.accepts_at("bob", "", t + LEASE_TIMEOUT));
     }
 
     #[test]
     fn a_lapsed_lease_is_picked_up_by_the_next_command() {
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("alice", t));
+        assert!(a.accepts_at("alice", "", t));
         // No explicit expire call: accepts_at must notice the lapse itself.
-        assert!(a.accepts_at("bob", t + LEASE_TIMEOUT));
+        assert!(a.accepts_at("bob", "", t + LEASE_TIMEOUT));
         assert_eq!(a.current().unwrap().session, "bob");
     }
 
@@ -303,12 +313,12 @@ mod tests {
     fn an_explicit_claim_takes_over() {
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("alice", t));
+        assert!(a.accepts_at("alice", "", t));
         let displaced = a.claim_at("bob", "Bob", t);
         assert_eq!(displaced.unwrap().session, "alice");
         assert_eq!(a.current().unwrap().name, "Bob");
-        assert!(!a.accepts_at("alice", t));
-        assert!(a.accepts_at("bob", t));
+        assert!(!a.accepts_at("alice", "", t));
+        assert!(a.accepts_at("bob", "", t));
     }
 
     #[test]
@@ -358,14 +368,24 @@ mod tests {
     }
 
     #[test]
+    fn driving_a_free_wheel_names_the_driver_from_the_command() {
+        // The name rides on the drive itself rather than arriving separately,
+        // so the other consoles never show a new driver as "operator" while
+        // two messages settle.
+        let a = arbiter();
+        a.accepts_at("alice", "Ada", Instant::now());
+        assert_eq!(a.current().unwrap().name, "Ada");
+    }
+
+    #[test]
     fn legacy_consoles_share_one_anonymous_lease() {
         // A console that predates the protocol sends an empty session. It must
         // still be able to drive rather than being locked out forever.
         let a = arbiter();
         let t = Instant::now();
-        assert!(a.accepts_at("", t));
-        assert!(a.accepts_at("", t));
-        assert!(!a.accepts_at("alice", t));
+        assert!(a.accepts_at("", "", t));
+        assert!(a.accepts_at("", "", t));
+        assert!(!a.accepts_at("alice", "", t));
     }
 
     #[test]
@@ -379,7 +399,7 @@ mod tests {
         assert_eq!(rx.borrow_and_update().clone().unwrap().session, "alice");
 
         // Renewing the same lease must not republish.
-        a.accepts_at("alice", t);
+        a.accepts_at("alice", "", t);
         assert!(!rx.has_changed().unwrap());
 
         a.release_at("alice", t);

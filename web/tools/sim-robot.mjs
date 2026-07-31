@@ -9,13 +9,13 @@
 //
 //   node tools/sim-robot.mjs my-test-bot
 //
-// Then point the console at that robot id. Open it in two windows to exercise
-// taking over, releasing, and the lease lapsing.
+// Then point the console at that robot id. Open it in two windows to watch the
+// wheel pass between them.
 import clasp from '@clasp-to/sdk'
 
 const robotId = process.argv[2] || 'hsl-sim'
 const url = process.env.RELAY || 'wss://relay.clasp.to'
-const LEASE_MS = 8000
+const LEASE_MS = 1500
 const VIEWER_TIMEOUT_MS = 20000
 
 const base = `/robot/${robotId}`
@@ -45,9 +45,9 @@ await c.set(A.status('protocol'), 2)
 await c.set(A.status('driver'), null)
 await c.set(A.status('viewers'), 0)
 
-// Published only when the holder actually changes, like the real arbiter: the
-// console renews its claim every few seconds and that must not republish a
-// Param every few seconds.
+// Published only when the holder actually changes, like the real arbiter: a
+// driver renewing several times a second must not republish a Param several
+// times a second.
 let publishedDriver = undefined
 function publishDriver() {
   const key = driver ? `${driver.session}:${driver.name}` : null
@@ -57,10 +57,10 @@ function publishDriver() {
   console.log(driver ? `driver: ${driver.name} (${driver.session.slice(0, 8)})` : 'wheel free')
 }
 
-function accepts(session) {
+function accepts(session, name) {
   expire()
   if (!driver) {
-    driver = { session, name: 'operator' }
+    driver = { session, name: (name || '').trim().slice(0, 32) || 'operator' }
     touched = Date.now()
     publishDriver()
     return true
@@ -81,7 +81,7 @@ function expire() {
 
 c.on(`${base}/cmd/**`, (value, address) => {
   if (address === A.drive) {
-    if (!accepts(value?.session || '')) return
+    if (!accepts(value?.session || '', value?.name)) return
     if (estopped) return
     const t = clamp(value?.throttle)
     const s = clamp(value?.steer)

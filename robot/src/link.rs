@@ -106,7 +106,7 @@ async fn subscribe_commands(
                     // Only the operator holding the wheel moves the robot.
                     // Everyone else's commands are dropped here, before they
                     // can reach the motors or reset the drive watchdog.
-                    if arbiter.accepts(&cmd.session) {
+                    if arbiter.accepts(&cmd.session, &cmd.name) {
                         let _ = tx.send(MotionCommand::Drive(cmd));
                     }
                 }

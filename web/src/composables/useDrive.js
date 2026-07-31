@@ -1,10 +1,26 @@
 // Teleop input: the drive pad's pointer drag and the keyboard, folded into one
-// throttle/steer demand and sent to the robot at a fixed rate.
+// throttle/steer demand and sent to the robot.
 //
 // This lives outside the pad component on purpose. The pad is drawn in the
 // sidebar normally and inside the video in fullscreen, and only one thing may
 // own the key listeners and the send timer: two of them would double every
 // command and fight over the knob.
+//
+// # Why this is not a plain event on press and release
+//
+// Sending only on the edges is the obvious design and it is not safe here.
+// `cmd/drive` is a CLASP Stream, which is best-effort by contract, so a
+// dropped release leaves the robot holding its last velocity. Worse, a release
+// is never sent at all when the operator's network drops, their machine
+// sleeps, or the tab dies mid-drive. The robot's watchdog coasting on silence
+// is the only thing that covers those, and it can only do that if silence
+// means something.
+//
+// So the demand is sent the instant it changes, which is what makes the
+// controls feel immediate, and then repeated at a low rate for as long as the
+// robot is actually moving, purely so that going quiet is meaningful. Holding a
+// key steady is a handful of messages a second rather than a continuous
+// sampling of the input, and releasing goes silent after one zero frame.
 //
 // Keyboard rules learned the hard way, all of them safety-relevant on a robot
 // that keeps moving while a key is held:
@@ -22,7 +38,15 @@
 
 import { onUnmounted, reactive, ref, watch } from 'vue'
 
-const SEND_HZ = 15
+// Keepalive while moving. Comfortably inside the robot's 400 ms drive
+// watchdog, so a single dropped frame does not cause a spurious coast, and far
+// below the old fixed 15 Hz sampling.
+const REPEAT_MS = 150
+
+// Floor on the gap between change-driven sends. A pointer drag fires far
+// faster than the robot can care about, and without this a single flick would
+// queue a burst of near-identical commands.
+const MIN_GAP_MS = 50
 
 // Physical key positions to a unit vector: [steer, throttle].
 const DRIVE_KEYS = {
@@ -48,6 +72,10 @@ export function useDrive(control, { enabled, onEngage } = {}) {
   // True once a zero frame has been sent for the current release, so we send
   // exactly one courtesy stop rather than a stream of them.
   let stopped = true
+  // The demand the robot was last told about, and when.
+  let sentX = 0
+  let sentY = 0
+  let sentAt = 0
 
   const allowed = () => (enabled ? Boolean(enabled.value) : true)
 
@@ -69,10 +97,13 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     pointerId = event.pointerId
     event.currentTarget?.setPointerCapture?.(event.pointerId)
     setFromPointer(event)
+    pump()
   }
 
   function onPointerMove(event) {
-    if (dragging.value && event.pointerId === pointerId) setFromPointer(event)
+    if (!dragging.value || event.pointerId !== pointerId) return
+    setFromPointer(event)
+    pump()
   }
 
   function onPointerUp(event) {
@@ -80,6 +111,7 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     dragging.value = false
     pointerId = null
     settle()
+    pump()
   }
 
   function onKeyDown(event) {
@@ -93,11 +125,15 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     engage()
     held.add(event.code)
     applyKeys()
+    pump()
   }
 
   function onKeyUp(event) {
     if (!DRIVE_KEYS[event.code]) return
-    if (held.delete(event.code)) settle()
+    if (held.delete(event.code)) {
+      settle()
+      pump()
+    }
   }
 
   // A key released while the window is not focused never reports a keyup, so
@@ -106,6 +142,7 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     if (held.size === 0) return
     held.clear()
     settle()
+    pump()
   }
 
   function onVisibility() {
@@ -140,22 +177,37 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     engaged.value = false
   }
 
-  function tick() {
+  // The one place a drive command leaves the console. Called straight from
+  // every input handler, so a press is on the wire in the same event rather
+  // than waiting for a tick, and from a timer, so a steady demand keeps
+  // feeding the robot's watchdog.
+  function pump() {
     const driving = allowed() && (dragging.value || held.size > 0)
-    if (driving) {
-      stopped = false
-      control.drive(knob.y, knob.x)
+
+    if (!driving) {
+      // One zero frame on release so the robot stops promptly instead of
+      // waiting out its watchdog. After that, silence.
+      if (!stopped) {
+        stopped = true
+        sentAt = 0
+        control.stop()
+      }
       return
     }
-    // One zero frame on release so the robot stops promptly instead of waiting
-    // out its watchdog. After that, silence.
-    if (!stopped) {
-      stopped = true
-      control.stop()
-    }
+
+    const now = performance.now()
+    const changed = knob.x !== sentX || knob.y !== sentY
+    const due = changed ? MIN_GAP_MS : REPEAT_MS
+    if (now - sentAt < due) return
+
+    stopped = false
+    sentX = knob.x
+    sentY = knob.y
+    sentAt = now
+    control.drive(knob.y, knob.x)
   }
 
-  timer = setInterval(tick, 1000 / SEND_HZ)
+  timer = setInterval(pump, MIN_GAP_MS)
   window.addEventListener('keydown', onKeyDown)
   window.addEventListener('keyup', onKeyUp)
   window.addEventListener('blur', releaseAll)
@@ -178,6 +230,7 @@ export function useDrive(control, { enabled, onEngage } = {}) {
         knob.x = 0
         knob.y = 0
         engaged.value = false
+        pump()
       }
     })
   }
@@ -187,6 +240,8 @@ export function useDrive(control, { enabled, onEngage } = {}) {
     window.removeEventListener('keydown', onKeyDown)
     window.removeEventListener('keyup', onKeyUp)
     window.removeEventListener('blur', releaseAll)
+    window.removeEventListener('pointerup', onPointerUp)
+    window.removeEventListener('pointercancel', onPointerUp)
     document.removeEventListener('visibilitychange', onVisibility)
   })
 

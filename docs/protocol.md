@@ -17,9 +17,9 @@ a single lossy frame.
 
 | Address | Type | Payload | Notes |
 |---|---|---|---|
-| `cmd/drive` | Stream | `{ throttle, steer, seq, ts, session }` | 10 to 20 Hz teleop. Lossy is fine because it is continuous and watchdog-backed. Obeyed only from the session holding the wheel. |
+| `cmd/drive` | Stream | `{ throttle, steer, seq, ts, session, name }` | Sent the moment the demand changes, then repeated every 150 ms for as long as the robot is moving. Lossy is fine because it repeats and is watchdog-backed. Obeyed only from the session holding the wheel. |
 | `cmd/estop` | Param | `bool` | Latched. `true` holds the motors stopped. Re-syncs to a late-joining second operator. Never arbitrated: any operator may stop the robot. |
-| `cmd/control` | Event | `ControlCommand` | Claim or release the driving lease. |
+| `cmd/control` | Event | `ControlCommand` | Take the wheel from whoever holds it, or give it up. Not needed to start driving. |
 | `cfg/max_speed` | Param | `number` 0..1 | Speed ceiling. Survives reconnect. |
 | `status/protocol` | Param | `number` | Wire contract version, currently 2. Absent on robots predating multi-operator support. |
 | `status/online` | Param | `bool` | Set true on connect, false on clean shutdown. |
@@ -35,13 +35,31 @@ a single lossy frame.
 ## DriveCommand
 
 ```json
-{ "throttle": 0.5, "steer": -0.2, "seq": 1234, "ts": 1717000000000, "session": "..." }
+{ "throttle": 0.5, "steer": -0.2, "seq": 1234, "ts": 1717000000000, "session": "...", "name": "Ada" }
 ```
 
 `throttle` and `steer` are each normalized to -1..1. Positive `steer` turns the
 robot to its right. `seq` is monotonic per operator; `ts` is the operator's send
 time in milliseconds. `session` is the sender's CLASP session, which the robot
-checks against the driving lease before the command reaches the motors.
+checks against the driving lease before the command reaches the motors. `name`
+rides along so that taking a free wheel by simply driving still names the
+driver for everyone else's console; sending it separately would race the drive
+itself.
+
+### Why this is a repeating stream and not an event per press
+
+Sending only on press and release is the obvious design, and it is not safe on
+this transport. `cmd/drive` is a Stream, best-effort by contract, so a dropped
+release leaves the robot holding its last velocity. Worse, no release is ever
+sent at all when an operator's network drops, their machine sleeps, or their
+tab dies mid-drive. The watchdog coasting on silence is the only thing that
+covers those cases, and it can only do that if silence means something.
+
+So the console sends the demand the instant it changes, which is what makes the
+controls feel immediate, and then repeats it every 150 ms for as long as the
+robot is moving, purely so that going quiet is meaningful. A release sends one
+zero frame and then nothing at all. Holding a key steady is a handful of
+messages a second rather than a continuous sampling of the input.
 
 ## Control and the driving lease
 
@@ -62,14 +80,17 @@ driving.
 
 The rules:
 
-- A claim always succeeds, displacing the current holder. Taking over from
-  someone is a social problem, not a protocol one, and on a shared robot a lease
-  nobody can break is worse than an occasional rude handoff.
-- Driving while the wheel is free claims it implicitly, so a lone operator never
-  has to ask.
-- The lease lapses after 8 seconds without a drive command from its holder. A
-  console that holds the wheel without driving re-sends its claim every few
-  seconds, so an open console keeps control while a closed one frees it.
+- Driving while the wheel is free claims it implicitly, named from the drive
+  command. Nobody ever asks for permission.
+- The lease lapses 1.5 seconds after the holder's last drive command, which is
+  about the length of a pause between deliberate movements. An operator who is
+  driving renews it many times over; one who stops frees it almost at once. In
+  practice the wheel belongs to whoever is currently driving, and taking turns
+  needs no buttons at all.
+- A claim still succeeds immediately, displacing the current holder. That is
+  for grabbing the wheel from someone mid-drive. Taking over is a social
+  problem, not a protocol one, and on a shared robot a lease nobody can break
+  is worse than an occasional rude handoff.
 - The e-stop is not arbitrated at all.
 
 `status/protocol` is what tells a console the robot arbitrates. When it is

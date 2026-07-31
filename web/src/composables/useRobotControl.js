@@ -21,8 +21,11 @@ export function useRobotControl(robotId, operatorName) {
       steer: clamp(steer),
       seq,
       ts: Date.now(),
-      // The robot obeys drive only from the session holding the wheel.
+      // The robot obeys drive only from the session holding the wheel, and
+      // names an implicitly claimed wheel from this rather than from a
+      // separate message that would race it.
       session: sessionId.value || '',
+      name: operatorName?.value || '',
     })
   }
 
