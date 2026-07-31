@@ -98,14 +98,30 @@ Use the same `ROBOT_ID` in the console to pair them.
 
 ## Deploy the console
 
-The console is a static site. On DigitalOcean App Platform:
+The console is a static site: `npm ci && npm run build` in `web/`, serve
+`web/dist`. Any static host works.
+
+### GitHub Pages (default)
+
+`.github/workflows/pages.yml` builds `web/` and publishes it on every push to
+`main` that touches `web/`, plus on demand from the Actions tab. The site lands
+at `https://<owner>.github.io/hsl-telepresence-bot/`.
+
+One-time setup on a fresh fork: **Settings -> Pages -> Source: GitHub Actions**.
+
+A project site is served from a subpath, so the build needs a matching asset
+base. The workflow passes it as `VITE_BASE=/<repo>/`; everything else (dev,
+`npm run build`, root-path hosts) defaults to `/`. On a custom domain or a
+`<user>.github.io` repo, set `VITE_BASE` to `/`.
+
+### DigitalOcean App Platform
 
 ```bash
 doctl apps create --spec deploy/digitalocean/app.yaml
 ```
 
-Edit the `github.repo` field in that spec first. Any static host works; the
-build is `npm ci && npm run build` with output in `web/dist`.
+Edit the `github.repo` field in that spec first. The site is served from the
+root there, so no `VITE_BASE` is needed.
 
 ## Versions
 

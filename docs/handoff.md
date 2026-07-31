@@ -16,8 +16,9 @@ Current state of the telepresence robot, what is verified, and what to do next.
   (`/usr/local/bin/hsl-robot`) is built from the current `main`.
 - The operator console is a Vue 3 static site in `web/`. It defaults to robot id
   `hslbot` and connects to `wss://relay.clasp.to`. Run it locally with
-  `cd web && npm run dev`, or deploy it to DigitalOcean App Platform with
-  `deploy/digitalocean/app.yaml`.
+  `cd web && npm run dev`. It publishes to GitHub Pages automatically on pushes
+  to `main` that touch `web/` (`.github/workflows/pages.yml`), and can still be
+  deployed to DigitalOcean App Platform with `deploy/digitalocean/app.yaml`.
 - **Teleop drives the motors from the console** (confirmed on hardware). Video
   streams live to the console over WebRTC. Control and telemetry pass over the
   relay. The camera captures its side-by-side mode.
@@ -181,7 +182,11 @@ with `--no-default-features` to use the mock motor backend and skip GStreamer.
   (seconds), not instant.
 - Audio has no hardware; the audio task is a best-effort no-op.
 - Public relay auth and rate limits are not documented; the robot connects
-  anonymously. Self-hosting `clasp-relay` is the documented fallback.
+  anonymously. Self-hosting `clasp-relay` is the documented fallback. With the
+  console hosted publicly on GitHub Pages, anyone who loads the page and knows
+  the robot id (`hslbot`, the console's default) can drive the robot while it is
+  online. The relay is the only gate, and today there is none. If that matters,
+  put a token on the relay or rename the robot id to something unguessable.
 - Seen once: a long-running robot stopped acting on live `cmd/estop` Param
   updates (drive Streams kept flowing) until a restart, which re-reads the
   latched value. Not yet root-caused; if it recurs, suspect the CLASP client's
