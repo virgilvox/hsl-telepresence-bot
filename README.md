@@ -50,6 +50,18 @@ established, the control plane still works and the robot stays drivable.
 
 The full address and message contract is in [docs/protocol.md](docs/protocol.md).
 
+### Several operators at once
+
+Up to four people can watch the same robot. The Pi captures and encodes once and
+fans that stream out to one WebRTC peer each, so the expensive half of the work
+does not scale with the audience.
+
+One person drives at a time. The robot owns that decision and publishes it, so
+the consoles render an answer rather than guessing: driving with a free wheel
+takes it, "Take over" takes it from whoever has it, and a lease stops being
+renewed when a console closes, which frees the wheel a few seconds later. The
+e-stop is not arbitrated. Anyone watching can stop the robot at any time.
+
 ### Why not Conduyt for the motors
 
 Conduyt is a host-to-device protocol whose "device" is a microcontroller
@@ -84,6 +96,21 @@ Open the printed URL, set the robot id and relay (`wss://relay.clasp.to` by
 default), and connect. The console works before a robot is online: it connects
 to the relay, and the drive pad, e-stop, and telemetry panel are all live. Video
 shows "Waiting for robot" until a robot answers.
+
+Drive by dragging the pad or holding WASD / the arrow keys; release to coast.
+`F` puts the video fullscreen, where the stop, the pad and the telemetry follow
+as a corner HUD.
+
+To work on the console with no robot to hand, run the stand-in:
+
+```bash
+node tools/sim-robot.mjs my-test-bot
+```
+
+It answers the whole control plane (status, the driving lease, the e-stop,
+presence, telemetry) but has no camera, so video stays on "Waiting for robot".
+Point two browser windows at that robot id to exercise taking over and handing
+back.
 
 ### Robot agent (on the Pi)
 

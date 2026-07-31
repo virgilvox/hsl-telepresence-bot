@@ -12,6 +12,7 @@
 
 mod audio;
 mod config;
+mod control;
 mod link;
 mod motion;
 mod protocol;
@@ -40,8 +41,14 @@ async fn main() -> anyhow::Result<()> {
     // exists even when video is compiled out, so the link layer stays uniform.
     let (video_tx, video_rx) = mpsc::unbounded_channel();
 
-    let link = link::connect(&cfg, motion_tx.clone(), video_tx).await?;
+    // Decides which of several connected operators is allowed to drive. Built
+    // before the link because the inbound command path consults it.
+    let (arbiter, driver_rx) = control::Arbiter::new();
+
+    let link = link::connect(&cfg, motion_tx.clone(), video_tx, arbiter.clone()).await?;
     tracing::info!(session = %link.session, "connected to relay");
+
+    control::spawn(link.client.clone(), link.addr.clone(), arbiter, driver_rx);
 
     telemetry::spawn(
         link.client.clone(),

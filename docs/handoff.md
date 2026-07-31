@@ -1,8 +1,17 @@
 # Handoff
 
-Last updated 2026-07-15.
+Last updated 2026-07-31.
 
 Current state of the telepresence robot, what is verified, and what to do next.
+
+## Read this first if you are picking up after 2026-07-31
+
+The console gained multi-operator support and the robot side of it has **never
+run on hardware**. The Pi was powered off when it was written, so it is verified
+by unit tests, a full typecheck against real GStreamer headers, and an
+end-to-end test against a stand-in robot, but not by a camera and two motors.
+See "Multi-operator" below for exactly what is and is not proven, and for how to
+back it out if the robot comes up unhappy.
 
 ## Where things stand
 
@@ -22,6 +31,60 @@ Current state of the telepresence robot, what is verified, and what to do next.
 - **Teleop drives the motors from the console** (confirmed on hardware). Video
   streams live to the console over WebRTC. Control and telemetry pass over the
   relay. The camera captures its side-by-side mode.
+
+## Multi-operator (2026-07-31 session, not yet on hardware)
+
+Several people can now watch one robot and take turns driving it.
+
+**Video.** The Pi captures and encodes once and fans the encoded stream through a
+`tee` to one `webrtcbin` per viewer, up to four. Encoding cost no longer scales
+with the audience; only payloading and DTLS do. Joining rebuilds the pipeline,
+which blacks out the existing viewers for a moment. That is deliberate, and the
+reasoning is in the module docs at the top of `robot/src/video.rs`: splicing a
+branch into a live pipeline can wedge the streaming thread and take the camera
+down for everyone, while a rebuild cannot get stuck and makes the fresh encoder
+emit a keyframe immediately. Leaving does not rebuild. Each branch queue is
+`leaky=downstream`, so one wedged peer drops buffers instead of stalling the tee
+and freezing everybody.
+
+**Presence** is now a heartbeat. Consoles re-send `video/hello` every 3 s for as
+long as they want video and send `bye` on their way out; the robot drops a viewer
+it has not heard from in 20 s. That is what frees a slot when a tab closes,
+without waiting on an ICE timeout, and it is why every viewer reattaches by
+itself after a robot restart.
+
+**Driving** is arbitrated by the robot in `robot/src/control.rs`. Driving a free
+wheel claims it, a claim always displaces the current holder, and the lease
+lapses 8 s after the holder's last command. A console that holds the wheel
+re-sends its claim every 3 s, so an open console keeps control and a closed one
+frees it. Commands from anyone else are dropped in `link.rs` before they reach
+the motors or reset the drive watchdog. **The e-stop is not arbitrated**: anyone
+watching can stop the robot, which is the point, because the person who can see
+the collision coming is not always the one holding the wheel.
+
+`status/protocol` (2) is how a console knows the robot arbitrates. An older robot
+does not publish it, and the console then lets anyone drive rather than waiting
+on a lease that will never be granted. This matters during a rollout: the console
+auto-deploys on push while the Pi only updates when it is next powered on, so
+new-console/old-robot is a state that really happens.
+
+### What is proven, and what is not
+
+Verified: 22 Rust unit tests including 11 covering the lease rules; `cargo check
+--all-targets` with the real GStreamer headers; and the whole console flow
+against `web/tools/sim-robot.mjs` in two browsers, covering take control, take
+over, release, lapse on tab close, a non-driver being refused, and a non-driver
+still being able to e-stop.
+
+Not verified: **anything involving the actual camera.** The multi-branch pipeline
+has never had a v4l2 device attached. The first hardware run should watch
+`journalctl -u hsl-robot -f` while a second viewer joins, and confirm the
+existing viewer's picture comes back after the rebuild.
+
+To back it out: `git revert` the multi-operator commit and let the self-updater
+rebuild, or on the Pi
+`sudo systemctl stop hsl-robot-update.timer && cd ~/hsl-telepresence-bot && git checkout 769e28e && (rebuild per "Rebuild and redeploy")`. The console tolerates
+an older robot by design, so reverting only the Pi is safe.
 
 ## Action items, in order
 
@@ -172,14 +235,20 @@ with `--no-default-features` to use the mock motor backend and skip GStreamer.
 
 ## Known limitations
 
-- Video serves one viewer at a time. The established viewer holds the camera; a
-  second operator sees "waiting" until the first disconnects. A session that
-  never establishes within a grace window can be handed to a waiting viewer, so
-  a stale viewer does not block the camera forever.
-- A viewer that closes its tab is detected when its WebRTC connection fails, and
-  the session is torn down so the next viewer can take over. There is no
-  explicit `bye` on close yet, so recovery waits on the ICE failure timeout
-  (seconds), not instant.
+- Four viewers maximum, and a fifth is ignored with a warning in the journal
+  rather than queued. The number is a guess at what a Pi 3B+ and a 100 Mbit NIC
+  will carry; nobody has measured where it actually falls over.
+- Somebody joining briefly interrupts the picture for everyone already watching,
+  because the pipeline is rebuilt. See "Multi-operator" for why that trade was
+  made.
+- All viewers share one encoder, so the bitrate cannot adapt per viewer. One
+  operator on a bad connection sees drops rather than a lower-quality stream.
+- You can only drive from a visible tab. Browsers throttle timers in a hidden
+  tab to roughly 1 Hz, which is slower than the robot's 400 ms drive watchdog,
+  so commands from a background tab would arrive too sparsely to hold the
+  motors. The console does not try to fight this: hiding the tab or losing
+  focus releases every held key, the robot coasts, and the wheel frees on its
+  own a few seconds later.
 - Audio has no hardware; the audio task is a best-effort no-op.
 - Public relay auth and rate limits are not documented; the robot connects
   anonymously. Self-hosting `clasp-relay` is the documented fallback. With the

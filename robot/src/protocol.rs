@@ -6,12 +6,23 @@
 //! Signal type choices (see docs/protocol.md for the full rationale):
 //!   - drive       Stream  (high rate, lossy tolerant, backed by a watchdog)
 //!   - estop       Param   (latched, re-synced to late joiners)
+//!   - control     Event   (one-shot claim/release of the driving lease)
 //!   - cfg/*       Param   (setpoints that must survive reconnect)
 //!   - status/*    Param   (what the UI must render correctly on connect)
 //!   - tel/*       Stream   (high rate telemetry)
 //!   - video/*     Param presence + Event signaling
 
 use serde::{Deserialize, Serialize};
+
+/// Wire contract version, published as `status/protocol` on connect.
+///
+/// A console uses it to tell a multi-operator robot from an older one. Version
+/// 1 served a single viewer and had no notion of who was driving; version 2
+/// serves several viewers at once and arbitrates the wheel. When this is
+/// absent, the console must assume 1 and let anyone drive, because an older
+/// robot ignores control messages entirely and would otherwise look permanently
+/// locked.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Builds the CLASP addresses for one robot rooted at `/robot/<id>`.
 #[derive(Clone, Debug)]
@@ -37,6 +48,11 @@ impl Addresses {
 
     pub fn estop(&self) -> String {
         format!("{}/cmd/estop", self.base)
+    }
+
+    /// Where operators claim and release the driving lease.
+    pub fn control(&self) -> String {
+        format!("{}/cmd/control", self.base)
     }
 
     pub fn cfg(&self, name: &str) -> String {
@@ -77,7 +93,7 @@ impl Addresses {
 
 /// A continuous teleoperation command. Sent on `cmd/drive` as a Stream at
 /// roughly 10 to 20 Hz. Both fields are normalized; the robot clamps them.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DriveCommand {
     /// Forward/backward demand, -1.0 (full reverse) to 1.0 (full forward).
     pub throttle: f64,
@@ -92,6 +108,12 @@ pub struct DriveCommand {
     /// Operator send timestamp in milliseconds, for latency measurement.
     #[serde(default, deserialize_with = "de_lenient_u64")]
     pub ts: u64,
+    /// CLASP session of the operator that sent this. The robot obeys drive
+    /// commands only from whoever holds the lease (see `control::Arbiter`).
+    /// Defaults to empty for consoles predating multi-operator support, which
+    /// the arbiter treats as one anonymous operator rather than rejecting.
+    #[serde(default)]
+    pub session: String,
 }
 
 /// Deserialize a `u64` from any JSON number, integer or float. `Date.now()` and
@@ -111,6 +133,31 @@ where
             .unwrap_or(0)),
         _ => Ok(0),
     }
+}
+
+/// A request to take or give up the driving lease, sent as an Event on
+/// `cmd/control`. Watching is unrestricted; only driving is arbitrated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "action", rename_all = "kebab-case")]
+pub enum ControlCommand {
+    /// Take the wheel, displacing whoever holds it.
+    Claim {
+        session: String,
+        #[serde(default)]
+        name: String,
+    },
+    /// Give the wheel up. Ignored unless this session holds it.
+    Release { session: String },
+}
+
+/// Who currently holds the driving lease. Published as the `status/driver`
+/// Param, or null when the wheel is free.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Driver {
+    /// CLASP session of the operator holding the wheel.
+    pub session: String,
+    /// Display name, for the other operators' consoles.
+    pub name: String,
 }
 
 /// WebRTC signaling message exchanged over the `video/signal/<session>` Event

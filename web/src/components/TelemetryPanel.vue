@@ -6,6 +6,7 @@ const props = defineProps({
   motors: { type: Object, required: true },
   lastSeen: { type: Number, default: 0 },
   online: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false },
 })
 
 const battery = computed(() => {
@@ -15,16 +16,21 @@ const battery = computed(() => {
 
 const mode = computed(() => props.status.mode || '--')
 
-function bar(value) {
-  return `${Math.min(100, Math.abs(Number(value) || 0) * 100).toFixed(0)}%`
+// Wheel demand is signed, so the bars grow out from the centre: forward to the
+// right, reverse to the left. A bar anchored at one end would make full reverse
+// look like a stop.
+function fill(value) {
+  const v = Math.max(-1, Math.min(1, Number(value) || 0))
+  const width = `${Math.abs(v) * 50}%`
+  return v < 0 ? { right: '50%', width } : { left: '50%', width }
 }
 </script>
 
 <template>
-  <section class="panel telemetry">
-    <p class="panel-title">Telemetry</p>
+  <section class="telemetry" :class="{ compact }">
+    <p v-if="!compact" class="panel-title">Telemetry</p>
 
-    <div class="rows">
+    <div v-if="!compact" class="rows">
       <div class="row">
         <span class="k">Robot link</span>
         <span class="v" :class="online ? 'ok' : 'off'">{{ online ? 'Online' : 'Not seen' }}</span>
@@ -41,16 +47,18 @@ function bar(value) {
 
     <div class="motors">
       <div class="motor">
-        <span class="ml">Left</span>
+        <span class="ml">L</span>
         <div class="track">
-          <div class="fill" :class="{ rev: motors.left < 0 }" :style="{ width: bar(motors.left) }" />
+          <div class="centre" />
+          <div class="bar" :class="{ rev: motors.left < 0 }" :style="fill(motors.left)" />
         </div>
         <span class="mv mono">{{ (motors.left || 0).toFixed(2) }}</span>
       </div>
       <div class="motor">
-        <span class="ml">Right</span>
+        <span class="ml">R</span>
         <div class="track">
-          <div class="fill" :class="{ rev: motors.right < 0 }" :style="{ width: bar(motors.right) }" />
+          <div class="centre" />
+          <div class="bar" :class="{ rev: motors.right < 0 }" :style="fill(motors.right)" />
         </div>
         <span class="mv mono">{{ (motors.right || 0).toFixed(2) }}</span>
       </div>
@@ -60,18 +68,22 @@ function bar(value) {
 
 <style scoped>
 .telemetry {
-  padding: 0.85rem;
+  padding: 0.8rem;
+}
+.telemetry.compact {
+  padding: 0;
+  min-width: 190px;
 }
 .rows {
   display: flex;
   flex-direction: column;
-  gap: 0.4rem;
-  margin-bottom: 0.9rem;
+  gap: 0.35rem;
+  margin-bottom: 0.85rem;
 }
 .row {
   display: flex;
   justify-content: space-between;
-  font-size: 0.88rem;
+  font-size: 0.85rem;
 }
 .k {
   color: var(--text-dim);
@@ -80,36 +92,62 @@ function bar(value) {
   color: var(--ok);
 }
 .v.off {
-  color: var(--text-dim);
+  color: var(--text-faint);
 }
 .motors {
   display: flex;
   flex-direction: column;
-  gap: 0.55rem;
+  gap: 0.45rem;
 }
 .motor {
   display: grid;
-  grid-template-columns: 3rem 1fr 3rem;
+  grid-template-columns: 1rem 1fr 2.6rem;
   align-items: center;
   gap: 0.5rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
 }
 .ml {
-  color: var(--text-dim);
+  color: var(--text-faint);
+  font-family: var(--mono);
+}
+.compact .ml,
+.compact .mv {
+  color: var(--hud-dim);
 }
 .track {
+  position: relative;
   height: 8px;
-  background: var(--surface-2);
-  border-radius: 4px;
+  background: var(--surface-3);
+  border-radius: 3px;
   overflow: hidden;
 }
-.fill {
-  height: 100%;
-  background: var(--accent);
-  border-radius: 4px;
+.compact .track {
+  background: rgba(255, 255, 255, 0.12);
 }
-.fill.rev {
+.centre {
+  position: absolute;
+  left: 50%;
+  top: 1px;
+  bottom: 1px;
+  width: 1px;
+  background: var(--border-strong);
+  transform: translateX(-0.5px);
+}
+.compact .centre {
+  background: rgba(255, 255, 255, 0.25);
+}
+.bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--accent);
+  transition: width 80ms linear;
+}
+.bar.rev {
   background: var(--text-dim);
+}
+.compact .bar.rev {
+  background: var(--hud-dim);
 }
 .mv {
   text-align: right;

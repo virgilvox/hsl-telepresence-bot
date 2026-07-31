@@ -1,162 +1,100 @@
 <script setup>
-import { ref, onMounted, onUnmounted, reactive } from 'vue'
+// Presentational. All input handling and the send loop live in useDrive so the
+// pad can be drawn twice (sidebar and fullscreen HUD) without two of them
+// fighting over the keyboard.
+import { computed } from 'vue'
 
 const props = defineProps({
-  control: { type: Object, required: true },
+  drive: { type: Object, required: true },
   disabled: { type: Boolean, default: false },
+  compact: { type: Boolean, default: false },
 })
 
-const SEND_HZ = 15
-
-const pad = ref(null)
-const knob = reactive({ x: 0, y: 0 }) // -1..1, y positive is up (forward)
-const active = ref(false)
-const keys = new Set()
-
-let pointerId = null
-let timer = null
-
-function setFromPointer(event) {
-  const el = pad.value
-  if (!el) return
-  const rect = el.getBoundingClientRect()
-  const nx = ((event.clientX - rect.left) / rect.width) * 2 - 1
-  const ny = ((event.clientY - rect.top) / rect.height) * 2 - 1
-  knob.x = clamp(nx)
-  knob.y = clamp(-ny)
-}
-
-function onDown(event) {
-  if (props.disabled) return
-  active.value = true
-  pointerId = event.pointerId
-  pad.value.setPointerCapture?.(event.pointerId)
-  setFromPointer(event)
-}
-
-function onMove(event) {
-  if (active.value && event.pointerId === pointerId) setFromPointer(event)
-}
-
-function onUp(event) {
-  if (event.pointerId !== pointerId) return
-  active.value = false
-  pointerId = null
-  recenter()
-}
-
-function recenter() {
-  if (keys.size > 0) return // keyboard still driving
-  knob.x = 0
-  knob.y = 0
-  props.control.stop()
-}
-
-function tick() {
-  applyKeys()
-  if (props.disabled) return
-  if (active.value || keys.size > 0) {
-    props.control.drive(knob.y, knob.x)
-  }
-}
-
-function applyKeys() {
-  if (keys.size === 0) return
-  let y = 0
-  let x = 0
-  if (keys.has('w') || keys.has('ArrowUp')) y += 1
-  if (keys.has('s') || keys.has('ArrowDown')) y -= 1
-  if (keys.has('a') || keys.has('ArrowLeft')) x -= 1
-  if (keys.has('d') || keys.has('ArrowRight')) x += 1
-  knob.x = clamp(x)
-  knob.y = clamp(y)
-}
-
-function onKeyDown(event) {
-  if (props.disabled) return
-  if (isDriveKey(event.key)) {
-    keys.add(event.key)
-    event.preventDefault()
-  }
-}
-
-function onKeyUp(event) {
-  if (isDriveKey(event.key)) {
-    keys.delete(event.key)
-    if (keys.size === 0 && !active.value) recenter()
-  }
-}
-
-function isDriveKey(key) {
-  return ['w', 'a', 's', 'd', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(key)
-}
-
-function clamp(v) {
-  return Math.max(-1, Math.min(1, v))
-}
-
-onMounted(() => {
-  timer = setInterval(tick, 1000 / SEND_HZ)
-  window.addEventListener('keydown', onKeyDown)
-  window.addEventListener('keyup', onKeyUp)
-})
-
-onUnmounted(() => {
-  clearInterval(timer)
-  window.removeEventListener('keydown', onKeyDown)
-  window.removeEventListener('keyup', onKeyUp)
-})
+const knob = computed(() => props.drive.knob)
+const lit = (code) => props.drive.held.has(code)
 </script>
 
 <template>
-  <section class="panel drive">
-    <p class="panel-title">Drive</p>
+  <section class="drive" :class="{ compact, disabled }">
+    <p v-if="!compact" class="panel-title">Drive</p>
+
     <div
-      ref="pad"
       class="pad"
-      :class="{ disabled }"
-      @pointerdown="onDown"
-      @pointermove="onMove"
-      @pointerup="onUp"
-      @pointercancel="onUp"
+      @pointerdown="drive.onPointerDown"
+      @pointermove="drive.onPointerMove"
+      @pointerup="drive.onPointerUp"
+      @pointercancel="drive.onPointerUp"
     >
+      <div class="ring" />
       <div class="crosshair v" />
       <div class="crosshair h" />
       <div
         class="knob"
-        :class="{ active }"
-        :style="{
-          left: `${(knob.x + 1) * 50}%`,
-          top: `${(1 - knob.y) * 50}%`,
-        }"
+        :class="{ active: drive.dragging || drive.held.size > 0 }"
+        :style="{ left: `${(knob.x + 1) * 50}%`, top: `${(1 - knob.y) * 50}%` }"
       />
     </div>
-    <div class="readout mono">
-      <span>thr {{ knob.y.toFixed(2) }}</span>
-      <span>str {{ knob.x.toFixed(2) }}</span>
+
+    <div class="keys" aria-hidden="true">
+      <span class="key" :class="{ lit: lit('KeyA') || lit('ArrowLeft') }">A</span>
+      <span class="key" :class="{ lit: lit('KeyS') || lit('ArrowDown') }">S</span>
+      <span class="key" :class="{ lit: lit('KeyW') || lit('ArrowUp') }">W</span>
+      <span class="key" :class="{ lit: lit('KeyD') || lit('ArrowRight') }">D</span>
     </div>
-    <p class="hint">Drag the pad or use WASD / arrow keys. Release to coast.</p>
+
+    <div class="readout mono">
+      <span><i>thr</i>{{ knob.y.toFixed(2).padStart(5, ' ') }}</span>
+      <span><i>str</i>{{ knob.x.toFixed(2).padStart(5, ' ') }}</span>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .drive {
-  padding: 0.85rem;
+  padding: 0.8rem;
+}
+.drive.compact {
+  padding: 0;
 }
 .pad {
   position: relative;
   aspect-ratio: 1;
   width: 100%;
-  max-width: 240px;
+  max-width: 200px;
   margin: 0 auto;
   background: var(--surface-2);
   border: 1px solid var(--border);
-  border-radius: 14px;
+  border-radius: 12px;
   touch-action: none;
   overflow: hidden;
+  cursor: grab;
 }
-.pad.disabled {
-  opacity: 0.5;
+.compact .pad {
+  max-width: 150px;
+  background: rgba(0, 0, 0, 0.3);
+  border-color: var(--hud-border);
+}
+.disabled .pad {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.pad:active {
+  cursor: grabbing;
+}
+.ring {
+  position: absolute;
+  inset: 16%;
+  border: 1px solid var(--border);
+  border-radius: 50%;
+  opacity: 0.7;
+}
+.compact .ring,
+.compact .crosshair {
+  border-color: var(--hud-border);
+  background: var(--hud-border);
+}
+.compact .ring {
+  background: none;
 }
 .crosshair {
   position: absolute;
@@ -164,42 +102,83 @@ onUnmounted(() => {
 }
 .crosshair.v {
   left: 50%;
-  top: 8%;
-  bottom: 8%;
+  top: 6%;
+  bottom: 6%;
   width: 1px;
   transform: translateX(-0.5px);
 }
 .crosshair.h {
   top: 50%;
-  left: 8%;
-  right: 8%;
+  left: 6%;
+  right: 6%;
   height: 1px;
   transform: translateY(-0.5px);
 }
 .knob {
   position: absolute;
-  width: 20%;
-  height: 20%;
+  width: 19%;
+  height: 19%;
   border-radius: 50%;
   background: var(--accent);
   transform: translate(-50%, -50%);
-  transition: box-shadow 100ms ease;
+  transition: box-shadow 120ms ease;
 }
 .knob.active {
-  box-shadow: 0 0 0 6px var(--accent-soft);
+  box-shadow: 0 0 0 7px var(--accent-soft);
+}
+.compact .knob.active {
+  box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 30%, transparent);
+}
+.keys {
+  display: flex;
+  justify-content: center;
+  gap: 3px;
+  margin-top: 0.6rem;
+}
+.key {
+  font-family: var(--mono);
+  font-size: 0.65rem;
+  line-height: 1;
+  padding: 0.28rem 0.4rem;
+  min-width: 1.5rem;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-faint);
+  transition: color 90ms ease, border-color 90ms ease, background 90ms ease;
+}
+.compact .key {
+  border-color: var(--hud-border);
+  color: var(--hud-dim);
+}
+.key.lit {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.compact .key.lit {
+  background: transparent;
 }
 .readout {
   display: flex;
   justify-content: center;
-  gap: 1.25rem;
-  margin-top: 0.7rem;
+  gap: 1rem;
+  margin-top: 0.5rem;
   color: var(--text-dim);
-  font-size: 0.85rem;
+  font-size: 0.8rem;
+  white-space: pre;
 }
-.hint {
-  margin: 0.5rem 0 0;
-  text-align: center;
-  color: var(--text-dim);
-  font-size: 0.75rem;
+.compact .readout {
+  color: var(--hud-dim);
+  font-size: 0.72rem;
+}
+.readout i {
+  font-style: normal;
+  color: var(--text-faint);
+  margin-right: 0.4rem;
+}
+.compact .readout i {
+  color: var(--hud-dim);
+  opacity: 0.7;
 }
 </style>

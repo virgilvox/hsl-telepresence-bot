@@ -48,8 +48,16 @@ impl MotorBackend for HatBackend {
     fn set_wheels(&mut self, speeds: WheelSpeeds) -> anyhow::Result<()> {
         // Apply per-motor inversion for how this chassis is wired (the right
         // motor is usually mounted mirror-imaged from the left).
-        let left = if self.invert_left { -speeds.left } else { speeds.left };
-        let right = if self.invert_right { -speeds.right } else { speeds.right };
+        let left = if self.invert_left {
+            -speeds.left
+        } else {
+            speeds.left
+        };
+        let right = if self.invert_right {
+            -speeds.right
+        } else {
+            speeds.right
+        };
         hat_driver::drive_motor(&mut self.pwm, &M1, left)?;
         hat_driver::drive_motor(&mut self.pwm, &M2, right)?;
         Ok(())

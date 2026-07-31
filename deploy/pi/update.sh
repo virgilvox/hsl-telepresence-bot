@@ -15,6 +15,13 @@ REPO="${HSL_REPO:-/home/pi/hsl-telepresence-bot}"
 BUILD_USER="${HSL_BUILD_USER:-pi}"
 BRANCH="${HSL_BRANCH:-main}"
 BINARY_DEST="/usr/local/bin/hsl-robot"
+# The revision the installed binary was actually built from. Compared against
+# the remote instead of the checkout's HEAD, because the checkout moves forward
+# before the build runs: if a build fails, HEAD already matches the remote and
+# comparing the two would report "up to date" forever while the robot quietly
+# kept running the old binary. Comparing what was *installed* makes a failed
+# build retry on the next timer tick instead.
+STAMP="${HSL_STAMP:-/var/lib/hsl-telepresence/built-rev}"
 
 # Build with LTO off and a bounded job count. The Pi 3B+ has under 1 GB of RAM,
 # and a full-LTO release link is reliably OOM-killed even with swap.
@@ -41,12 +48,23 @@ fi
 local_rev=$(as_user "cd '$REPO' && git rev-parse HEAD" | tail -n1)
 remote_rev=$(as_user "cd '$REPO' && git rev-parse 'origin/$BRANCH'" | tail -n1)
 
-if [ "$local_rev" = "$remote_rev" ]; then
-  log "already up to date at ${local_rev:0:12}"
+mkdir -p "$(dirname "$STAMP")"
+built_rev=$(cat "$STAMP" 2>/dev/null || true)
+
+# First run under the stamp scheme with nothing pending: adopt the current
+# revision rather than forcing a rebuild of code that is already installed.
+if [ -z "$built_rev" ] && [ "$local_rev" = "$remote_rev" ]; then
+  echo "$remote_rev" >"$STAMP"
+  log "already up to date at ${local_rev:0:12} (recorded)"
   exit 0
 fi
 
-log "updating ${local_rev:0:12} -> ${remote_rev:0:12}"
+if [ "$built_rev" = "$remote_rev" ]; then
+  log "already up to date at ${remote_rev:0:12}"
+  exit 0
+fi
+
+log "updating ${built_rev:-unknown} -> ${remote_rev:0:12}"
 as_user "cd '$REPO' && git reset --hard 'origin/$BRANCH'"
 
 log "building release agent (this takes several minutes on the Pi)"
@@ -54,6 +72,9 @@ as_user "cd '$REPO/robot' && $BUILD_ENV \$HOME/.cargo/bin/cargo build --release"
 
 log "installing binary and restarting service"
 install -m 755 "$REPO/robot/target/release/robot" "$BINARY_DEST"
+# Recorded only after a successful build and install, so the stamp always names
+# a revision that is really running.
+echo "$remote_rev" >"$STAMP"
 systemctl restart hsl-robot
 
 log "updated to ${remote_rev:0:12}"

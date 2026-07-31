@@ -4,8 +4,11 @@
 //! about motors or GStreamer; it moves typed values.
 
 use crate::config::Config;
+use crate::control::Arbiter;
 use crate::motion::MotionCommand;
-use crate::protocol::{Addresses, DriveCommand, Presence, SignalMessage, VideoEvent};
+use crate::protocol::{
+    Addresses, ControlCommand, DriveCommand, Presence, SignalMessage, VideoEvent, PROTOCOL_VERSION,
+};
 use clasp_client::prelude::Value;
 use clasp_client::Clasp;
 use serde::de::DeserializeOwned;
@@ -36,6 +39,7 @@ pub async fn connect(
     cfg: &Config,
     motion_tx: UnboundedSender<MotionCommand>,
     video_tx: UnboundedSender<VideoEvent>,
+    arbiter: Arc<Arbiter>,
 ) -> anyhow::Result<Link> {
     let mut builder = Clasp::builder(&cfg.clasp_url)
         .name(&cfg.robot_name)
@@ -53,8 +57,28 @@ pub async fn connect(
     client.set(addr.status("online").as_str(), true).await?;
     client.set(addr.status("mode").as_str(), "manual").await?;
     client.set(addr.status("estop").as_str(), false).await?;
+    // Tells a console this robot arbitrates the wheel and can serve several
+    // viewers. Its absence is what marks an older robot, so it must be
+    // published before anything else can act on it.
+    client
+        .set(
+            addr.status("protocol").as_str(),
+            to_value(serde_json::json!(PROTOCOL_VERSION)),
+        )
+        .await?;
+    // Start from a known-free wheel and an empty room rather than leaving last
+    // run's values latched on the relay.
+    client
+        .set(addr.status("driver").as_str(), Value::Null)
+        .await?;
+    client
+        .set(
+            addr.status("viewers").as_str(),
+            to_value(serde_json::json!(0)),
+        )
+        .await?;
 
-    subscribe_commands(&client, &addr, motion_tx).await?;
+    subscribe_commands(&client, &addr, motion_tx, arbiter).await?;
     subscribe_video(&client, &addr, &session, video_tx).await?;
 
     Ok(Link {
@@ -68,20 +92,44 @@ async fn subscribe_commands(
     client: &Arc<Clasp>,
     addr: &Addresses,
     motion_tx: UnboundedSender<MotionCommand>,
+    arbiter: Arc<Arbiter>,
 ) -> anyhow::Result<()> {
-    // Drive and e-stop live under cmd/**.
+    // Drive, e-stop, and control live under cmd/**.
     let drive_addr = addr.drive();
     let estop_addr = addr.estop();
+    let control_addr = addr.control();
     let tx = motion_tx.clone();
     client
         .subscribe(addr.cmd_pattern().as_str(), move |value, address| {
             if address == drive_addr {
                 if let Some(cmd) = decode::<DriveCommand>(&value) {
-                    let _ = tx.send(MotionCommand::Drive(cmd));
+                    // Only the operator holding the wheel moves the robot.
+                    // Everyone else's commands are dropped here, before they
+                    // can reach the motors or reset the drive watchdog.
+                    if arbiter.accepts(&cmd.session) {
+                        let _ = tx.send(MotionCommand::Drive(cmd));
+                    }
                 }
             } else if address == estop_addr {
+                // Never arbitrated: anyone watching can stop the robot.
                 if let Some(engaged) = as_bool(&value) {
                     let _ = tx.send(MotionCommand::EStop(engaged));
+                }
+            } else if address == control_addr {
+                match decode::<ControlCommand>(&value) {
+                    Some(ControlCommand::Claim { session, name }) => {
+                        if let Some(displaced) = arbiter.claim(&session, &name) {
+                            tracing::info!(
+                                from = %displaced.name,
+                                to = %name,
+                                "wheel taken over"
+                            );
+                        }
+                    }
+                    Some(ControlCommand::Release { session }) => {
+                        arbiter.release(&session);
+                    }
+                    None => tracing::debug!("undecodable control command"),
                 }
             }
         })

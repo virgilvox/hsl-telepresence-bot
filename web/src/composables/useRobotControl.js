@@ -1,12 +1,13 @@
 // Turns operator intent into CLASP signals: continuous drive as a Stream, the
-// latched e-stop as a Param, and config setpoints as Params.
+// latched e-stop as a Param, config setpoints as Params, and the driving lease
+// as one-shot control Events.
 
 import { computed } from 'vue'
 import { useClasp } from './useClasp.js'
-import { addresses } from '../protocol.js'
+import { addresses, ControlAction } from '../protocol.js'
 
-export function useRobotControl(robotId) {
-  const { client, connected } = useClasp()
+export function useRobotControl(robotId, operatorName) {
+  const { client, connected, sessionId } = useClasp()
   const addr = computed(() => addresses(robotId.value))
 
   let seq = 0
@@ -20,6 +21,8 @@ export function useRobotControl(robotId) {
       steer: clamp(steer),
       seq,
       ts: Date.now(),
+      // The robot obeys drive only from the session holding the wheel.
+      session: sessionId.value || '',
     })
   }
 
@@ -41,7 +44,28 @@ export function useRobotControl(robotId) {
     c.set(addr.value.cfg('max_speed'), clamp01(value))
   }
 
-  return { drive, stop, setEstop, setMaxSpeed }
+  // Take the wheel. The robot grants this unconditionally, so this doubles as
+  // "take over from whoever has it".
+  function claimControl() {
+    const c = client.value
+    if (!c || !connected.value || !sessionId.value) return
+    c.emit(addr.value.control, {
+      action: ControlAction.Claim,
+      session: sessionId.value,
+      name: operatorName?.value || '',
+    })
+  }
+
+  function releaseControl() {
+    const c = client.value
+    if (!c || !connected.value || !sessionId.value) return
+    c.emit(addr.value.control, {
+      action: ControlAction.Release,
+      session: sessionId.value,
+    })
+  }
+
+  return { drive, stop, setEstop, setMaxSpeed, claimControl, releaseControl }
 }
 
 function clamp(v) {
