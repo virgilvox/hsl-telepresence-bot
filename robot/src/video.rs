@@ -125,6 +125,9 @@ pub fn spawn(
         let mut last_full_warning: Option<Instant> = None;
 
         let mut sweep = tokio::time::interval(SWEEP);
+        // A rebuild parks this loop for a moment. Without this the interval
+        // then fires once for every tick it missed, all at once.
+        sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
         loop {
             tokio::select! {
@@ -221,7 +224,7 @@ pub fn spawn(
                     if viewers.is_empty() {
                         if let Some(old) = broadcast.take() {
                             tracing::info!("no viewers left; releasing the camera");
-                            old.stop();
+                            teardown(old).await;
                         }
                         rebuild_at = None;
                     } else if broadcast
@@ -232,13 +235,13 @@ pub fn spawn(
                         if now >= *due {
                             rebuild_at = None;
                             generation += 1;
-                            if let Some(old) = broadcast.take() {
-                                old.stop();
-                            }
+                            let old = broadcast.take();
                             let audience: Vec<String> = viewers.keys().cloned().collect();
-                            match Broadcast::start(
-                                &cfg, &session, &audience, generation, &out_tx, &fail_tx,
-                            ) {
+                            match rebuild(
+                                old, &cfg, &session, audience.clone(), generation, &out_tx, &fail_tx,
+                            )
+                            .await
+                            {
                                 Ok(b) => {
                                     tracing::info!(
                                         viewers = audience.len(),
@@ -249,7 +252,7 @@ pub fn spawn(
                                 }
                                 Err(err) => {
                                     tracing::error!(%err, "failed to start video pipeline");
-                                    rebuild_at = Some(now + RETRY_DELAY);
+                                    rebuild_at = Some(Instant::now() + RETRY_DELAY);
                                 }
                             }
                         }
@@ -271,9 +274,52 @@ pub fn spawn(
         }
 
         if let Some(broadcast) = broadcast.take() {
-            broadcast.stop();
+            teardown(broadcast).await;
         }
     });
+}
+
+/// Replace the running pipeline with one built for `audience`, off the async
+/// runtime.
+///
+/// Both halves of this block: tearing a pipeline down waits for it to reach
+/// NULL so the camera file descriptor is really released, and opening a V4L2
+/// device that has wedged (which this camera does, see the hardware notes) can
+/// stall for a long time. Neither belongs on a runtime worker thread, because
+/// the motion watchdog shares the same executor and a stuck camera must never
+/// be able to delay coasting the motors.
+///
+/// The two are done together, in order, on one blocking thread: the old
+/// pipeline must have released the device before the new one opens it, or the
+/// new `v4l2src` gets EBUSY.
+async fn rebuild(
+    old: Option<Broadcast>,
+    cfg: &Config,
+    from: &str,
+    audience: Vec<String>,
+    generation: u64,
+    out_tx: &UnboundedSender<Outbound>,
+    fail_tx: &UnboundedSender<Failure>,
+) -> anyhow::Result<Broadcast> {
+    let cfg = cfg.clone();
+    let from = from.to_string();
+    let out_tx = out_tx.clone();
+    let fail_tx = fail_tx.clone();
+    tokio::task::spawn_blocking(move || {
+        if let Some(old) = old {
+            old.stop();
+        }
+        Broadcast::start(&cfg, &from, &audience, generation, &out_tx, &fail_tx)
+    })
+    .await
+    .map_err(|err| anyhow::anyhow!("pipeline build task failed: {err}"))?
+}
+
+/// Stop a pipeline off the async runtime, for the same reason as [`rebuild`].
+async fn teardown(broadcast: Broadcast) {
+    if let Err(err) = tokio::task::spawn_blocking(move || broadcast.stop()).await {
+        tracing::warn!(%err, "pipeline teardown task failed");
+    }
 }
 
 /// True when someone is watching who the running pipeline was not built for.

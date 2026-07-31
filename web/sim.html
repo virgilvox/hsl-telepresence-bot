@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Robot Simulator</title>
+    <meta
+      name="description"
+      content="Stand-in robot for the HeatSync Labs telepresence console: control plane, driving lease, and a real WebRTC camera feed, with no hardware"
+    />
+  </head>
+  <body>
+    <div class="wrap">
+      <header class="bar">
+        <span class="lamp" id="lamp"></span>
+        <span class="title">Robot Simulator</span>
+        <span class="state" id="state">stopped</span>
+        <div class="actions">
+          <span class="state" id="sessionId"></span>
+          <button id="start">Start</button>
+          <button id="stop" hidden>Stop</button>
+        </div>
+      </header>
+
+      <div class="fields">
+        <label>
+          <span>Robot id</span>
+          <input id="robotId" spellcheck="false" />
+        </label>
+        <label>
+          <span>Relay</span>
+          <input id="relay" spellcheck="false" />
+        </label>
+        <label>
+          <span>Token</span>
+          <input id="token" type="password" placeholder="optional" />
+        </label>
+      </div>
+
+      <p id="error"></p>
+
+      <div class="split">
+        <canvas id="camera"></canvas>
+
+        <div class="side">
+          <canvas id="map" width="280" height="200"></canvas>
+
+          <div class="rows">
+            <div class="row"><span class="k">driver</span><span class="v" id="driver">--</span></div>
+            <div class="row"><span class="k">e-stop</span><span class="v" id="estop">--</span></div>
+            <div class="row"><span class="k">wheels</span><span class="v" id="wheels">--</span></div>
+            <div class="row"><span class="k">pose</span><span class="v" id="pose">--</span></div>
+            <div class="row"><span class="k">viewers</span><span class="v" id="viewers">0</span></div>
+            <div class="row"><span class="k">render fps</span><span class="v" id="fps">0</span></div>
+            <div class="row"><span class="k">peers</span><span class="v" id="peers">--</span></div>
+          </div>
+
+          <p class="note">
+            Answers the control plane like the Pi does: latched status, the
+            driving lease, the e-stop, presence, telemetry, and a real WebRTC
+            offer carrying this canvas as a 1280&times;480 side-by-side stereo
+            track. Open the console, set the same robot id, and drive.
+          </p>
+          <p class="note">
+            The simulation and the camera run in a worker, so both keep full
+            rate while this tab sits behind the console. Watch
+            <em>render fps</em>: it should stay near 20 either way.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/sim/main.js"></script>
+  </body>
+</html>

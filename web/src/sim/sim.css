@@ -1,0 +1,161 @@
+/* The simulator borrows the console's tokens so the two read as one system,
+   but stays plainer: it is a bench instrument, not something to drive from. */
+
+.wrap {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  height: var(--header-h);
+  padding: 0 0.75rem;
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+}
+
+.bar .title {
+  font-size: var(--size-sm);
+  font-weight: 700;
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text-bright);
+  white-space: nowrap;
+}
+
+.bar .state {
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.bar .actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.fields {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(12rem, 2fr) minmax(8rem, 1fr);
+  gap: 0.6rem;
+}
+
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: var(--size-xs);
+  color: var(--text-faint);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 280px;
+  gap: 0.7rem;
+  align-items: start;
+}
+
+/* The captured frame. Shown at whatever width fits; the track itself is always
+   1280x480, the mode the Pi captures. */
+#camera {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--lift);
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+#map {
+  display: block;
+  width: 100%;
+  height: 200px;
+  background: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+
+.rows {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: var(--size-xs);
+}
+
+.row .k {
+  color: var(--text-faint);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+}
+
+.row .v {
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  white-space: pre;
+}
+
+.row .v.on {
+  color: var(--accent-bright);
+}
+
+.row .v.alarm {
+  color: var(--stop);
+}
+
+.note {
+  margin: 0;
+  font-size: var(--size-xs);
+  line-height: 1.6;
+  color: var(--text-faint);
+}
+
+.note code {
+  color: var(--text-dim);
+}
+
+#error {
+  color: var(--stop);
+  font-size: var(--size-sm);
+}
+
+#error:empty {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .split {
+    grid-template-columns: 1fr;
+  }
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}

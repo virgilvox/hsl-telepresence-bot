@@ -1,9 +1,14 @@
 // Subscribes to the robot's status Params and telemetry Streams. Status Params
 // snapshot on subscribe, so the panel shows correct state the instant it loads.
 
-import { reactive, ref, watch, onUnmounted } from 'vue'
+import { computed, reactive, ref, watch, onUnmounted } from 'vue'
 import { useClasp } from './useClasp.js'
 import { addresses } from '../protocol.js'
+
+// How long the robot may go quiet before the console stops calling it online.
+// It publishes motor telemetry five times a second, so this is many missed
+// messages, not a marginal one.
+const SILENCE_LIMIT_MS = 6000
 
 export function useTelemetry(robotId) {
   const { client, connected } = useClasp()
@@ -11,6 +16,23 @@ export function useTelemetry(robotId) {
   const status = reactive({})
   const motors = reactive({ left: 0, right: 0 })
   const lastSeen = ref(0)
+
+  // Liveness has to be derived from the passage of time, and time is not
+  // reactive. Without this tick, `online` would only be recomputed when a
+  // message arrived, so a robot that stopped sending would stay "online"
+  // forever: exactly the case the check exists to catch.
+  const now = ref(Date.now())
+  const clock = setInterval(() => {
+    now.value = Date.now()
+  }, 1000)
+
+  // `status/online` is a latched Param, so it survives the robot that set it.
+  // A robot killed uncleanly, unplugged, or crashed never clears it, and the
+  // relay keeps serving `true` to every console that connects afterwards. It
+  // is necessary but not sufficient: the robot must also still be talking.
+  const online = computed(
+    () => status.online === true && now.value - lastSeen.value < SILENCE_LIMIT_MS,
+  )
 
   let unsubs = []
 
@@ -58,7 +80,10 @@ export function useTelemetry(robotId) {
   }
 
   watch([connected, robotId], subscribe, { immediate: true })
-  onUnmounted(unsubscribe)
+  onUnmounted(() => {
+    clearInterval(clock)
+    unsubscribe()
+  })
 
-  return { status, motors, lastSeen }
+  return { status, motors, lastSeen, online }
 }

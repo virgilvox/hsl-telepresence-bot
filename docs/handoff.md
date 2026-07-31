@@ -81,11 +81,11 @@ new-console/old-robot is a state that really happens.
 
 ### What is proven, and what is not
 
-Verified: 22 Rust unit tests including 11 covering the lease rules; `cargo check
---all-targets` with the real GStreamer headers; and the whole console flow
-against `web/tools/sim-robot.mjs` in two browsers, covering take control, take
-over, release, lapse on tab close, a non-driver being refused, and a non-driver
-still being able to e-stop.
+Verified: 26 Rust unit tests including the lease rules; `cargo clippy
+--all-targets` against real GStreamer headers; and the whole console flow
+against the simulator in `web/sim.html`, including real WebRTC video, taking
+turns at the wheel, a non-driver being refused, and a non-driver still being
+able to e-stop.
 
 Not verified: **anything involving the actual camera.** The multi-branch pipeline
 has never had a v4l2 device attached. The first hardware run should watch

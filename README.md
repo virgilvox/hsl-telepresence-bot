@@ -101,16 +101,28 @@ Drive by dragging the pad or holding WASD / the arrow keys; release to coast.
 `F` puts the video fullscreen, where the stop, the pad and the telemetry follow
 as a corner HUD.
 
-To work on the console with no robot to hand, run the stand-in:
+### Testing without the robot
+
+`sim.html` is a stand-in robot: open it, give it a robot id, press Start, then
+point the console at the same id. It answers the entire control plane the way
+the Pi does (latched status, the driving lease, the e-stop, presence,
+telemetry) and streams a real WebRTC track carrying a simulated first-person
+view of a room, rendered as the same 1280x480 side-by-side stereo frame the
+camera produces. Drive it and it drives; the picture moves, the eye selector
+crops the right half, and a clock burned into the frame shows the feed is live.
 
 ```bash
-node tools/sim-robot.mjs my-test-bot
+cd web && npm run dev     # console at /, simulator at /sim.html
 ```
 
-It answers the whole control plane (status, the driving lease, the e-stop,
-presence, telemetry) but has no camera, so video stays on "Waiting for robot".
-Point two browser windows at that robot id to exercise taking over and handing
-back.
+It also ships with the console, so on a deployed site the simulator is at
+`/sim.html`: testing is a URL rather than a checkout. Open it in two windows to
+watch the wheel pass between operators.
+
+The simulation and its camera run in a Web Worker, because browsers clamp
+timers on a hidden page to about one a second and the simulator usually sits
+behind the console. Driving still needs the *console* visible, for the same
+reason.
 
 ### Robot agent (on the Pi)
 

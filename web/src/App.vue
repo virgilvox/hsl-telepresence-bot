@@ -22,10 +22,9 @@ const operatorName = computed(() => settings.name)
 
 const { connected, connecting, sessionId, error, connect, disconnect } = useClasp()
 const control = useRobotControl(robotId, operatorName)
-const { status, motors, lastSeen } = useTelemetry(robotId)
+const { status, motors, lastSeen, online } = useTelemetry(robotId)
 const { remoteStream, state: videoState } = useVideo(robotId)
 
-const online = computed(() => status.online === true || Date.now() - lastSeen.value < 5000)
 const estopEngaged = computed(() => status.estop === true)
 
 // A robot that publishes no protocol version predates multi-operator support:

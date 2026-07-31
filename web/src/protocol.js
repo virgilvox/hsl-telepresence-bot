@@ -19,6 +19,9 @@ export function addresses(robotId) {
     cfgPattern: `${base}/cfg/**`,
     status: (name) => `${base}/status/${name}`,
     statusPattern: `${base}/status/**`,
+    // The console only ever subscribes to telemetry, but the simulator
+    // publishes it, and both speak the same contract.
+    tel: (name) => `${base}/tel/${name}`,
     telPattern: `${base}/tel/**`,
     videoHello: `${base}/video/hello`,
     videoSignal: (session) => `${base}/video/signal/${session}`,
