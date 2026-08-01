@@ -11,6 +11,7 @@
 #![cfg_attr(not(all(feature = "motor-hat", feature = "video")), allow(dead_code))]
 
 mod audio;
+mod broadcast;
 mod config;
 mod control;
 mod health;

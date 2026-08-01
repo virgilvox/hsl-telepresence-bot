@@ -285,6 +285,20 @@ input::placeholder {
   box-shadow: 0 0 0 3px var(--stop-wash);
 }
 
+/* Talking but not listening. Deliberately not the same as `busy`: the robot is
+   sending everything it normally sends, so every other reading on the panel
+   looks correct, and this is the only thing on screen saying otherwise. */
+.lamp.deaf {
+  background: var(--stop);
+  animation: lamp-deaf 1.2s steps(1, end) infinite;
+}
+
+@keyframes lamp-deaf {
+  50% {
+    background: var(--warn);
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition-duration: 1ms !important;

@@ -16,14 +16,14 @@
 
 import { ref, shallowRef, watch, onUnmounted } from 'vue'
 import { useClasp } from './useClasp.js'
-import { addresses, SignalKind } from '../protocol.js'
+import { addresses, SignalKind, ViewerRole } from '../protocol.js'
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }]
 
 // Comfortably inside the robot's viewer timeout, without chattering.
 const HELLO_INTERVAL_MS = 3000
 
-export function useVideo(robotId, iceServers = DEFAULT_ICE) {
+export function useVideo(robotId, wantsPeer = null, iceServers = DEFAULT_ICE) {
   const { client, connected, sessionId } = useClasp()
 
   const remoteStream = shallowRef(null)
@@ -173,10 +173,15 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
     }
   }
 
+  // The robot only has a handful of peer slots, and a peer is only worth one
+  // when the extra latency would be felt, which means when you are driving.
+  // Asking for `broadcast` otherwise is what lets the audience grow without
+  // the robot paying for each new person in it.
   function hello() {
     const c = client.value
     if (!c || !sessionId.value) return
-    c.emit(addr().videoHello, { session: sessionId.value, role: 'viewer' })
+    const role = wantsPeer?.value === false ? ViewerRole.Broadcast : ViewerRole.Peer
+    c.emit(addr().videoHello, { session: sessionId.value, role })
   }
 
   // Best effort: tells the robot to drop us now rather than after a timeout, so
@@ -223,7 +228,9 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
   const onPageHide = () => sayGoodbye()
   window.addEventListener('pagehide', onPageHide)
 
-  watch([connected, sessionId, robotId], start, { immediate: true })
+  // Changing role means the robot has to be told again, and any track we
+  // held has to go back so its slot frees for whoever is driving now.
+  watch([connected, sessionId, robotId, () => wantsPeer?.value], start, { immediate: true })
   onUnmounted(() => {
     window.removeEventListener('pagehide', onPageHide)
     stop()

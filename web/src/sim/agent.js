@@ -10,7 +10,7 @@
 // the one that is wrong.
 
 import clasp from '@clasp-to/sdk'
-import { addresses, SignalKind, PROTOCOL_VERSION } from '../protocol.js'
+import { addresses, SignalKind, PROTOCOL_VERSION, ViewerRole } from '../protocol.js'
 
 // Mirrors of the constants in the Rust agent. Keep them in step.
 const LEASE_MS = 1500
@@ -23,6 +23,101 @@ const MAX_VIEWERS = 4
 const TICKS_PER_TELEMETRY = 4
 
 const ICE = [{ urls: 'stun:stun.l.google.com:19302' }]
+
+
+// Publish the same broadcast the real robot publishes, so the console's
+// receiver can be exercised end to end without a Pi. Mirrors the framing in
+// robot/src/broadcast.rs and the encode settings of the Pi's h264 path.
+const BROADCAST_CHUNK = 60_000
+const BROADCAST_VERSION = 1
+
+function fragmentAccessUnit(seq, keyframe, data) {
+  const total = Math.max(1, Math.ceil(data.length / BROADCAST_CHUNK))
+  const out = []
+  for (let i = 0; i < total; i++) {
+    const slice = data.subarray(i * BROADCAST_CHUNK, (i + 1) * BROADCAST_CHUNK)
+    const chunk = new Uint8Array(10 + slice.length)
+    const view = new DataView(chunk.buffer)
+    chunk[0] = BROADCAST_VERSION
+    chunk[1] = keyframe ? 1 : 0
+    view.setUint32(2, seq >>> 0, true)
+    view.setUint16(6, i, true)
+    view.setUint16(8, total, true)
+    chunk.set(slice, 10)
+    out.push(chunk)
+  }
+  return out
+}
+
+/**
+ * Encode the simulated camera and publish it. Returns a stop function.
+ *
+ * Best effort by design: if this browser has no VideoEncoder the simulator
+ * simply serves WebRTC only, exactly as an older robot would.
+ */
+function startBroadcast(client, address, stream) {
+  const track = stream?.getVideoTracks?.()[0]
+  if (!track || typeof VideoEncoder !== 'function' || typeof MediaStreamTrackProcessor !== 'function') {
+    return () => {}
+  }
+
+  let seq = 0
+  let stopped = false
+  const encoder = new VideoEncoder({
+    output: (chunk) => {
+      const data = new Uint8Array(chunk.byteLength)
+      chunk.copyTo(data)
+      for (const part of fragmentAccessUnit(seq, chunk.type === 'key', data)) {
+        client.stream(address, part)
+      }
+      seq = (seq + 1) >>> 0
+    },
+    error: (err) => console.warn('sim broadcast encoder failed', err),
+  })
+
+  const settings = track.getSettings?.() || {}
+  encoder.configure({
+    codec: 'avc1.42001f',
+    width: settings.width || 1280,
+    height: settings.height || 480,
+    framerate: 30,
+    latencyMode: 'realtime',
+    // Annex-B with in-band SPS/PPS, which is what lets a console that arrives
+    // mid-stream configure its decoder from the stream itself.
+    avc: { format: 'annexb' },
+  })
+
+  const reader = new MediaStreamTrackProcessor({ track }).readable.getReader()
+  let sinceKeyframe = 0
+  ;(async () => {
+    while (!stopped) {
+      const { value: frame, done } = await reader.read()
+      if (done || !frame) break
+      if (encoder.state === 'configured' && encoder.encodeQueueSize < 3) {
+        // A keyframe every two seconds bounds how long a new arrival waits
+        // before it has a picture.
+        const keyframe = sinceKeyframe <= 0
+        sinceKeyframe = keyframe ? 60 : sinceKeyframe - 1
+        encoder.encode(frame, { keyFrame: keyframe })
+      }
+      frame.close()
+    }
+  })().catch(() => {})
+
+  return () => {
+    stopped = true
+    try {
+      reader.cancel()
+    } catch {
+      // The reader is already finished.
+    }
+    try {
+      if (encoder.state !== 'closed') encoder.close()
+    } catch {
+      // Nothing useful to do with a already-closed encoder.
+    }
+  }
+}
 
 export async function startAgent({ robotId, url, token, stream, onDemand, onEstop, onState }) {
   const addr = addresses(robotId)
@@ -46,6 +141,8 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
   let ticks = 0
 
   const viewers = new Map() // session -> { seen, pc }
+  // Broadcast-only watchers. Uncapped, and they never rebuild anything.
+  const watchers = new Map() // session -> seen
   let publishedViewers = -1
 
   await client.set(addr.status('online'), true)
@@ -123,12 +220,27 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
     client.on(addr.videoHello, (value) => {
       const viewer = value?.session
       if (!viewer) return
+
+      // A watcher wants the broadcast, not a track of its own. Serving it costs
+      // nothing per head, so it is never refused and never gets an offer. Same
+      // rule as robot/src/video.rs.
+      if (value?.role === ViewerRole.Broadcast) {
+        watchers.set(viewer, Date.now())
+        if (viewers.has(viewer)) dropViewer(viewer)
+        return
+      }
+
       const known = viewers.get(viewer)
       if (known) {
         known.seen = Date.now()
         return
       }
-      if (viewers.size >= MAX_VIEWERS) return
+      // Out of peer slots: still present, still counted, just on the broadcast.
+      if (viewers.size >= MAX_VIEWERS) {
+        watchers.set(viewer, Date.now())
+        return
+      }
+      watchers.delete(viewer)
       viewers.set(viewer, { seen: Date.now(), pc: null })
       offerTo(viewer)
     }),
@@ -225,9 +337,14 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
       for (const [viewer, entry] of viewers) {
         if (Date.now() - entry.seen > VIEWER_TIMEOUT_MS) dropViewer(viewer)
       }
-      if (viewers.size !== publishedViewers) {
-        publishedViewers = viewers.size
-        client.set(addr.status('viewers'), viewers.size)
+      for (const [viewer, seen] of watchers) {
+        if (Date.now() - seen > VIEWER_TIMEOUT_MS) watchers.delete(viewer)
+      }
+      // The audience is everyone, on a track or not.
+      const audience = viewers.size + watchers.size
+      if (audience !== publishedViewers) {
+        publishedViewers = audience
+        client.set(addr.status('viewers'), audience)
       }
       report()
     }
@@ -246,6 +363,8 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
 
   report()
 
+  const stopBroadcast = startBroadcast(client, addr.videoBroadcast, stream)
+
   return {
     get session() {
       return me()
@@ -261,6 +380,7 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
         }
       }
       try {
+        stopBroadcast()
         await client.set(addr.status('online'), false)
         await client.set(addr.status('driver'), null)
         await client.set(addr.status('viewers'), 0)

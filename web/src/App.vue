@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
 import ConnectionBar from './components/ConnectionBar.vue'
 import VideoView from './components/VideoView.vue'
 import DrivePad from './components/DrivePad.vue'
@@ -10,6 +10,7 @@ import { useClasp } from './composables/useClasp.js'
 import { useRobotControl } from './composables/useRobotControl.js'
 import { useTelemetry } from './composables/useTelemetry.js'
 import { useVideo } from './composables/useVideo.js'
+import { useBroadcast } from './composables/useBroadcast.js'
 import { useDrive } from './composables/useDrive.js'
 
 const STORAGE_KEY = 'hsl-console-settings'
@@ -22,8 +23,7 @@ const operatorName = computed(() => settings.name)
 
 const { connected, connecting, sessionId, error, connect, disconnect } = useClasp()
 const control = useRobotControl(robotId, operatorName)
-const { status, motors, lastSeen, online } = useTelemetry(robotId)
-const { remoteStream, state: videoState } = useVideo(robotId)
+const { status, motors, lastSeen, online, responsive } = useTelemetry(robotId)
 
 const estopEngaged = computed(() => status.estop === true)
 
@@ -39,6 +39,58 @@ const isDriver = computed(
   () => Boolean(driver.value?.session) && driver.value.session === sessionId.value,
 )
 const wheelFree = computed(() => !driver.value?.session)
+
+// A peer connection is the low-latency path and the robot has only a few, so
+// it is asked for when it is worth having: while driving. Everyone else, and
+// that is most people most of the time, watches the broadcast the relay fans
+// out, which costs the robot nothing per viewer.
+//
+// The hold is what makes this usable. The driving lease lapses 1.5 s after the
+// last command, which is deliberately short so the wheel passes freely, but
+// tying the track to it directly would tear down and renegotiate the peer
+// every time the driver paused to look at something. So the track is kept for
+// a while after the wheel goes, and only really given up by someone who has
+// stopped driving.
+const PEER_HOLD_MS = 30000
+const holdingPeer = ref(false)
+let peerHold = null
+
+watch(
+  isDriver,
+  (driving) => {
+    if (driving) {
+      if (peerHold) clearTimeout(peerHold)
+      peerHold = null
+      holdingPeer.value = true
+      return
+    }
+    if (!holdingPeer.value || peerHold) return
+    peerHold = setTimeout(() => {
+      peerHold = null
+      holdingPeer.value = false
+    }, PEER_HOLD_MS)
+  },
+  { immediate: true },
+)
+onUnmounted(() => {
+  if (peerHold) clearTimeout(peerHold)
+})
+
+// Until the robot's status has arrived we do not know whether it arbitrates,
+// and guessing "legacy" would have every console grab a scarce peer slot for
+// the first second of every connection. Waiting costs nothing: presence is a
+// heartbeat, so the right request goes out moments later either way.
+const statusKnown = computed(() => status.online !== undefined)
+const wantsPeer = computed(
+  () => statusKnown.value && (!arbitrated.value || isDriver.value || holdingPeer.value),
+)
+const { remoteStream, state: videoState } = useVideo(robotId, wantsPeer)
+const {
+  state: broadcastState,
+  attach: attachBroadcast,
+  error: broadcastError,
+} = useBroadcast(robotId)
+
 const mayDrive = computed(
   () => connected.value && (!arbitrated.value || isDriver.value || wheelFree.value),
 )
@@ -108,6 +160,7 @@ function saveSettings() {
       :connected="connected"
       :connecting="connecting"
       :online="online"
+      :responsive="responsive"
       :session-id="sessionId"
       :error="error"
       @update:settings="updateSettings"
@@ -116,7 +169,19 @@ function saveSettings() {
     />
 
     <main class="layout">
-      <VideoView ref="video" class="feed" :stream="remoteStream" :state="videoState">
+      <VideoView
+        ref="video"
+        class="feed"
+        :stream="remoteStream"
+        :state="videoState"
+        :broadcast-state="broadcastState"
+        :broadcast-error="broadcastError"
+        :connected="connected"
+        :connecting="connecting"
+        :attach-broadcast="attachBroadcast"
+        @connect="onConnect"
+        @disconnect="onDisconnect"
+      >
         <!-- In fullscreen the same controls come along, anchored to the
              corners, so going fullscreen never costs you the stop. -->
         <template #hud>

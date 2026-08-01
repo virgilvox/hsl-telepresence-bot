@@ -3,19 +3,81 @@
 // Its own chrome floats on the picture rather than sitting in a strip beneath
 // it, and in fullscreen the driving controls come along as a HUD through the
 // `hud` slot, so going fullscreen never means giving up the e-stop.
-import { ref, watch, onUnmounted } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { useFullscreen } from '../composables/useFullscreen.js'
 
 const props = defineProps({
   stream: { type: Object, default: null },
   state: { type: String, default: 'idle' },
+  broadcastState: { type: String, default: 'idle' },
+  broadcastError: { type: String, default: null },
+  connected: { type: Boolean, default: false },
+  connecting: { type: Boolean, default: false },
+  attachBroadcast: { type: Function, default: null },
 })
+
+const emit = defineEmits(['connect', 'disconnect'])
 
 // The stereoscopic camera sends one wide frame with left and right side by side.
 // The operator can view the whole frame or crop to a single eye.
 const eye = ref('both') // both | left | right
 const video = ref(null)
+const canvas = ref(null)
 const root = ref(null)
+
+// Which source is actually painting. A peer track wins whenever there is one,
+// because it is the same picture a quarter second sooner.
+const source = computed(() => {
+  if (props.stream && props.state === 'live') return 'peer'
+  if (props.broadcastState === 'live') return 'broadcast'
+  return 'none'
+})
+
+const hasPicture = computed(() => source.value !== 'none')
+
+// Video takes a few seconds on a good day: presence heartbeat, then an offer,
+// then ICE. Past this it is worth saying so rather than leaving a spinner
+// turning, because the usual causes (robot asleep, peer-to-peer blocked) are
+// ones the operator can act on.
+const SLOW_AFTER_MS = 12000
+const waitingSince = ref(0)
+const nowTick = ref(Date.now())
+let ticker = null
+
+const slowToConnect = computed(
+  () =>
+    props.connected &&
+    !hasPicture.value &&
+    waitingSince.value > 0 &&
+    nowTick.value - waitingSince.value > SLOW_AFTER_MS,
+)
+
+// The single line under the spinner. Says what is being waited on, not what
+// state machine it is in.
+const waitLabel = computed(() => {
+  if (!props.connected) return props.connecting ? 'Connecting to relay' : ''
+  if (props.broadcastState === 'unsupported' && props.state !== 'live') {
+    return 'This browser cannot decode the broadcast; waiting for a direct connection'
+  }
+  if (props.state === 'connecting') return 'Negotiating a direct connection'
+  if (props.state === 'failed') return 'Direct connection failed; falling back to the broadcast'
+  return 'Waiting for the robot\u2019s camera'
+})
+
+watch(
+  [hasPicture, () => props.connected],
+  ([picture, isConnected]) => {
+    waitingSince.value = isConnected && !picture ? Date.now() : 0
+  },
+  { immediate: true },
+)
+
+onMounted(() => {
+  ticker = setInterval(() => {
+    nowTick.value = Date.now()
+  }, 1000)
+  if (props.attachBroadcast) props.attachBroadcast(canvas.value)
+})
 
 const { isFullscreen, supported: fullscreenSupported, toggle: toggleFullscreen } =
   useFullscreen(root)
@@ -33,28 +95,53 @@ watch(
 )
 
 onUnmounted(() => {
+  if (ticker) clearInterval(ticker)
+  if (props.attachBroadcast) props.attachBroadcast(null)
   if (video.value) video.value.srcObject = null
 })
 
-const stateLabel = {
-  idle: 'no session',
-  waiting: 'waiting for robot',
-  connecting: 'negotiating',
-  live: 'live',
-  failed: 'connection failed',
-}
+// What the corner tag says. Which path the picture is arriving over is worth
+// showing: they have visibly different latency, and "broadcast" explains why
+// the controls feel ahead of the picture.
+const sourceLabel = computed(() => {
+  if (source.value === 'peer') return 'live \u00b7 direct'
+  if (source.value === 'broadcast') return 'live \u00b7 broadcast'
+  if (!props.connected) return 'not connected'
+  return 'no picture'
+})
 </script>
 
 <template>
   <section ref="root" class="video" :class="[`eye-${eye}`, { fs: isFullscreen }]">
-    <video ref="video" autoplay playsinline muted />
+    <!-- Two sources, one frame. The peer track is shown when it is up; the
+         broadcast canvas carries everyone else. -->
+    <video v-show="source === 'peer'" ref="video" autoplay playsinline muted />
+    <canvas v-show="source === 'broadcast'" ref="canvas" class="broadcast" />
 
-    <div v-if="state !== 'live'" class="waiting">
+    <!-- Not connected: one obvious thing to do, in the middle of the thing it
+         acts on, so a first-time visitor does not have to hunt the top bar. -->
+    <div v-if="!connected" class="curtain">
       <svg class="icon big" viewBox="0 0 24 24" aria-hidden="true">
         <path d="M4 7h11v10H4z" />
         <path d="M15 10l5-3v10l-5-3" />
       </svg>
-      <span>{{ stateLabel[state] || state }}</span>
+      <button class="connect" :disabled="connecting" @click="emit('connect')">
+        {{ connecting ? 'Connecting\u2026' : 'Connect to robot' }}
+      </button>
+      <span class="hint">{{ waitLabel }}</span>
+    </div>
+
+    <!-- Connected but nothing to show yet. -->
+    <div v-else-if="!hasPicture" class="curtain">
+      <span class="spinner" aria-hidden="true" />
+      <span class="hint">{{ waitLabel }}</span>
+      <template v-if="slowToConnect">
+        <span class="hint warn">
+          This is taking longer than usual. The robot may be offline, or a direct
+          connection may be blocked by this network.
+        </span>
+        <button class="retry" @click="emit('connect')">Retry</button>
+      </template>
     </div>
 
     <!-- Driving controls, only while fullscreen: outside it they live in the
@@ -65,11 +152,21 @@ const stateLabel = {
 
     <div class="chrome">
       <span class="tag">
-        <span class="lamp" :class="{ live: state === 'live' }" />
-        {{ stateLabel[state] || state }}
+        <span class="lamp" :class="{ live: hasPicture }" />
+        {{ sourceLabel }}
       </span>
 
       <div class="right">
+        <!-- Once connected the action inverts: the big button has done its job
+             and steps aside, leaving a quiet way back out. -->
+        <button
+          v-if="connected"
+          class="disconnect"
+          title="Disconnect from the robot"
+          @click="emit('disconnect')"
+        >
+          Disconnect
+        </button>
         <div class="eyes" role="group" aria-label="Camera view">
           <button :class="{ active: eye === 'left' }" @click="eye = 'left'">L</button>
           <button :class="{ active: eye === 'both' }" @click="eye = 'both'">Both</button>
@@ -130,7 +227,7 @@ video {
 
 /* Nothing to look at yet: say so on the same grid the drive pad uses, so an
    empty feed still reads as part of the instrument rather than a broken image. */
-.waiting {
+.curtain {
   position: absolute;
   inset: 0;
   display: flex;
@@ -146,6 +243,114 @@ video {
   font-size: var(--size-xs);
   letter-spacing: var(--track-wider);
   text-transform: uppercase;
+  padding: 1.5rem;
+  text-align: center;
+}
+
+/* The broadcast paints here. `contain` rather than `cover` so the wide
+   side-by-side frame is never cropped by the panel it sits in. */
+.broadcast {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+}
+
+/* The one thing to do on an empty screen, sized to say so. */
+.connect {
+  font-family: inherit;
+  font-size: var(--size-base);
+  letter-spacing: var(--track-wide);
+  text-transform: uppercase;
+  color: var(--ink);
+  background: var(--accent);
+  border: none;
+  padding: 0.85rem 1.9rem;
+  cursor: pointer;
+}
+
+.connect:hover:not(:disabled) {
+  background: var(--accent-bright);
+}
+
+.connect:disabled {
+  background: var(--line-strong);
+  color: var(--text-dim);
+  cursor: default;
+}
+
+.retry {
+  font-family: inherit;
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  padding: 0.45rem 1.1rem;
+  cursor: pointer;
+}
+
+.retry:hover {
+  border-color: var(--accent);
+  color: var(--accent-bright);
+}
+
+/* Once connected, leaving is a minor action and is styled like one. */
+.disconnect {
+  font-family: inherit;
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--line);
+  padding: 0.3rem 0.7rem;
+  cursor: pointer;
+}
+
+.disconnect:hover {
+  color: var(--stop);
+  border-color: var(--stop-dim);
+}
+
+.hint {
+  max-width: 34ch;
+  line-height: 1.6;
+  text-transform: none;
+  letter-spacing: var(--track-wide);
+}
+
+.hint.warn {
+  color: var(--warn);
+}
+
+/* A square that sweeps rather than a spinning circle, to match the panel
+   vocabulary the rest of the console uses. */
+.spinner {
+  width: 22px;
+  height: 3px;
+  background: var(--line-strong);
+  position: relative;
+  overflow: hidden;
+}
+
+.spinner::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  width: 40%;
+  background: var(--accent);
+  animation: sweep 1.1s ease-in-out infinite;
+}
+
+@keyframes sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
 }
 .big {
   font-size: 2rem;

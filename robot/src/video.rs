@@ -1,19 +1,36 @@
-//! Video plane. Captures the stereoscopic USB camera once and streams it to
-//! every operator over native WebRTC media tracks. CLASP is used only to
-//! exchange presence and SDP/ICE signaling; the media itself never touches the
-//! relay, because CLASP is a control transport, not a media transport.
+//! Video plane. Captures the stereoscopic USB camera once and serves it two
+//! ways.
 //!
-//! The robot is the offerer: when viewers announce presence, the robot builds a
-//! GStreamer pipeline whose `webrtcbin`s each produce an offer. Answers and ICE
-//! candidates come back through the link layer as [`VideoEvent::Signal`].
+//! # Two paths, because they are wanted for different things
 //!
-//! Pipeline: v4l2src (MJPEG) -> jpegdec -> H264 (hardware v4l2h264enc) -> RTP
-//! -> tee -> one queue + webrtcbin per viewer. Capture and encode happen once
-//! no matter how many people are watching, which is what makes several viewers
-//! affordable on a Pi 3B+: only payloading and encryption scale with the
-//! audience.
+//! A **peer connection** is the low-latency path, about a tenth of a second,
+//! and it is what teleoperation needs to feel like driving rather than like
+//! issuing instructions. Every peer costs the robot a payloader, DTLS/SRTP, and
+//! another full copy of the bitrate out of one Pi on shared WiFi, so there are
+//! only ever a handful ([`MAX_PEERS`]) and they go to whoever is driving.
 //!
-//! # Why the pipeline is rebuilt when someone joins
+//! The **broadcast** is the other path: the encoded stream published once to a
+//! CLASP address and fanned out by the relay (see `crate::broadcast`). It costs
+//! the robot exactly the same whether one person is watching or fifty, so the
+//! size of the audience stops being the robot's problem at all. It also never
+//! touches this pipeline, which matters more than it sounds: arriving to watch
+//! cannot interrupt anyone already watching.
+//!
+//! So the limit that used to be on viewers is now only on peers, and the number
+//! of people who can watch is bounded by the relay rather than by the Pi.
+//!
+//! CLASP still carries no peer media: presence and SDP/ICE only. The broadcast
+//! is a deliberate exception, and it is encoded video on a Stream rather than a
+//! media transport pretending to be one.
+//!
+//! # Pipeline
+//!
+//! v4l2src (MJPEG) -> jpegdec -> H264 (hardware v4l2h264enc) -> h264parse ->
+//! tee. One branch parses to byte-stream and lands in an appsink for the
+//! broadcast; the other payloads to RTP once and fans that out to a webrtcbin
+//! per peer. Capture and encode happen once no matter who is watching or how.
+//!
+//! # Why the pipeline is rebuilt when a peer joins
 //!
 //! Adding a branch to a live `tee` means requesting pads and blocking probes on
 //! a running pipeline, and getting that subtly wrong deadlocks the streaming
@@ -24,10 +41,11 @@
 //! fresh encoder emits an IDR immediately and the new viewer gets a picture
 //! without waiting for the next one.
 //!
-//! Departures do *not* rebuild. A viewer that leaves keeps a dead branch until
+//! Departures do *not* rebuild. A peer that leaves keeps a dead branch until
 //! the next join, which costs nothing but a payloader, and each branch queue is
 //! `leaky=downstream` so a stalled or dead peer drops buffers instead of
-//! blocking the tee and freezing everybody else.
+//! blocking the tee and freezing everybody else. Broadcast watchers never
+//! rebuild anything in either direction.
 //!
 //! The pipeline bus and each WebRTC connection state are watched: a camera
 //! drop, encoder fault, or peer disconnect tears the affected thing down so it
@@ -38,25 +56,46 @@
 
 use crate::config::Config;
 use crate::protocol::{Addresses, SignalMessage, VideoEvent};
+use clasp_client::prelude::Value;
 use clasp_client::Clasp;
 use gstreamer as gst;
 use gstreamer::prelude::*;
+use gstreamer_app as gst_app;
 use gstreamer_sdp as gst_sdp;
 use gstreamer_webrtc as gst_webrtc;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
+/// One encoded access unit on its way from the pipeline to the relay.
+struct EncodedFrame {
+    seq: u32,
+    keyframe: bool,
+    data: Vec<u8>,
+}
+
+/// Frames held between the streaming thread and the publishing task.
+///
+/// Small on purpose. The broadcast is best-effort by contract, so a relay or an
+/// uplink we cannot keep up with has to cost frames. A deep queue would instead
+/// spend memory to deliver video that is already too old to be worth watching.
+const FRAME_QUEUE: usize = 8;
+
 const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 
-/// Upper bound on simultaneous viewers. Encoding is shared, but each extra peer
-/// still costs a payloader, DTLS/SRTP, and outbound bandwidth, and the Pi 3B+
-/// has one 100 Mbit NIC and not much CPU left over. Past this, late arrivals
-/// wait rather than degrading the picture for everyone.
-const MAX_VIEWERS: usize = 4;
+/// Upper bound on simultaneous *peer* connections, which is not a limit on the
+/// audience.
+///
+/// Encoding is shared, but each extra peer still costs a payloader, DTLS/SRTP,
+/// and its own copy of the bitrate out of one Pi 3B+ on shared WiFi, so this
+/// number is about what the robot can push, and it is deliberately small.
+/// Everyone else watches the CLASP broadcast instead, which the relay fans out,
+/// so the number of people watching is bounded by the relay rather than by the
+/// robot. A peer is for whoever is driving and actually needs the latency.
+const MAX_PEERS: usize = 4;
 
 /// How long a viewer survives without saying hello. Consoles heartbeat every
 /// few seconds, so this drops a closed tab or a dead network well before a
@@ -111,10 +150,19 @@ pub fn spawn(
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<Outbound>();
         let (fail_tx, mut fail_rx) = mpsc::unbounded_channel::<Failure>();
+        let (frames_tx, mut frames_rx) = mpsc::channel::<EncodedFrame>(FRAME_QUEUE);
+        // Kept across rebuilds so the sequence a browser reassembles by never
+        // jumps backwards when the pipeline is replaced under it.
+        let frame_seq = Arc::new(AtomicU32::new(0));
 
-        // Live viewers and when each was last heard from. Ordered so the
-        // pipeline description is stable for a given set.
-        let mut viewers: BTreeMap<String, Instant> = BTreeMap::new();
+        // Operators on a WebRTC track of their own, and when each was last
+        // heard from. Ordered so the pipeline description is stable for a given
+        // set. Only this set can force a rebuild.
+        let mut peers: BTreeMap<String, Instant> = BTreeMap::new();
+        // Everyone watching the CLASP broadcast. They cost the robot nothing
+        // per head and never touch the pipeline, which is exactly why the
+        // audience can be any size.
+        let mut watchers: BTreeMap<String, Instant> = BTreeMap::new();
         let mut broadcast: Option<Broadcast> = None;
         let mut generation: u64 = 0;
         let mut rebuild_at: Option<Instant> = None;
@@ -137,9 +185,32 @@ pub fn spawn(
                             if presence.session.is_empty() {
                                 continue;
                             }
-                            let known = viewers.contains_key(&presence.session);
-                            if !known && viewers.len() >= MAX_VIEWERS {
-                                let now = Instant::now();
+                            let now = Instant::now();
+
+                            if !presence.wants_peer() {
+                                // A broadcast watcher. It cannot be refused,
+                                // because serving it costs the robot nothing:
+                                // the relay does the fanning out.
+                                let known = watchers.insert(presence.session.clone(), now).is_some();
+                                // Somebody switching to the broadcast should
+                                // stop being served a track they left behind.
+                                if peers.remove(&presence.session).is_some() {
+                                    if let Some(b) = broadcast.as_mut() {
+                                        b.forget(&presence.session);
+                                    }
+                                }
+                                if !known {
+                                    tracing::info!(
+                                        viewer = %presence.session,
+                                        watching = peers.len() + watchers.len(),
+                                        "watcher joined the broadcast"
+                                    );
+                                }
+                                continue;
+                            }
+
+                            let known = peers.contains_key(&presence.session);
+                            if !known && peers.len() >= MAX_PEERS {
                                 let due = last_full_warning
                                     .map(|t| now.saturating_duration_since(t) >= FULL_WARNING_EVERY)
                                     .unwrap_or(true);
@@ -147,24 +218,42 @@ pub fn spawn(
                                     last_full_warning = Some(now);
                                     tracing::warn!(
                                         viewer = %presence.session,
-                                        max = MAX_VIEWERS,
-                                        "viewer limit reached; turning new viewers away"
+                                        max = MAX_PEERS,
+                                        "peer slots full; this viewer must watch the broadcast"
                                     );
                                 }
+                                // Not turned away, just not given a track. It
+                                // still counts as present so the camera keeps
+                                // running for it, and its console falls back to
+                                // the broadcast when no offer arrives.
+                                watchers.insert(presence.session.clone(), now);
                                 continue;
                             }
-                            viewers.insert(presence.session.clone(), Instant::now());
+                            watchers.remove(&presence.session);
+                            peers.insert(presence.session.clone(), now);
                             if !known {
-                                tracing::info!(viewer = %presence.session, watching = viewers.len(), "viewer joined");
+                                tracing::info!(
+                                    viewer = %presence.session,
+                                    watching = peers.len() + watchers.len(),
+                                    "viewer joined on a peer connection"
+                                );
                             }
                         }
                         VideoEvent::Signal(message) => {
                             if let SignalMessage::Bye { from } = &message {
-                                if viewers.remove(from).is_some() {
+                                let left = peers.remove(from).is_some();
+                                let watched = watchers.remove(from).is_some();
+                                if left {
                                     if let Some(b) = broadcast.as_mut() {
                                         b.forget(from);
                                     }
-                                    tracing::info!(viewer = %from, watching = viewers.len(), "viewer said goodbye");
+                                }
+                                if left || watched {
+                                    tracing::info!(
+                                        viewer = %from,
+                                        watching = peers.len() + watchers.len(),
+                                        "viewer said goodbye"
+                                    );
                                 }
                                 continue;
                             }
@@ -211,53 +300,84 @@ pub fn spawn(
                             rebuild_at = Some(Instant::now() + RETRY_DELAY);
                         }
                         Failure::Viewer { viewer, .. } => {
-                            let was_watching = viewers.remove(&viewer).is_some();
-                            if was_watching {
+                            // Only the track is gone. The person may well still
+                            // be there on the broadcast, so their presence
+                            // heartbeat decides that, not this.
+                            if peers.remove(&viewer).is_some() {
                                 if let Some(b) = broadcast.as_mut() {
                                     b.forget(&viewer);
                                 }
-                                tracing::info!(%viewer, watching = viewers.len(), "viewer connection lost");
+                                tracing::info!(
+                                    %viewer,
+                                    watching = peers.len() + watchers.len(),
+                                    "viewer connection lost"
+                                );
                             }
                         }
                     }
                 }
                 _ = sweep.tick() => {
                     let now = Instant::now();
-                    let expired: Vec<String> = viewers
+                    let stale = |seen: &Instant| {
+                        now.saturating_duration_since(*seen) >= VIEWER_TIMEOUT
+                    };
+
+                    let expired: Vec<String> = peers
                         .iter()
-                        .filter(|(_, seen)| now.saturating_duration_since(**seen) >= VIEWER_TIMEOUT)
+                        .filter(|(_, seen)| stale(seen))
                         .map(|(viewer, _)| viewer.clone())
                         .collect();
                     for viewer in expired {
-                        viewers.remove(&viewer);
+                        peers.remove(&viewer);
                         if let Some(b) = broadcast.as_mut() {
                             b.forget(&viewer);
                         }
-                        tracing::info!(%viewer, watching = viewers.len(), "viewer timed out");
+                        tracing::info!(
+                            %viewer,
+                            watching = peers.len() + watchers.len(),
+                            "viewer timed out"
+                        );
                     }
+                    // Watchers leaving is bookkeeping. It frees no resource and
+                    // must not disturb the pipeline, so it is silent.
+                    watchers.retain(|_, seen| !stale(seen));
 
-                    if viewers.is_empty() {
+                    let audience = peers.len() + watchers.len();
+                    if audience == 0 {
                         if let Some(old) = broadcast.take() {
-                            tracing::info!("no viewers left; releasing the camera");
+                            tracing::info!("nobody watching; releasing the camera");
                             teardown(old).await;
                         }
                         rebuild_at = None;
                     } else if broadcast
                         .as_ref()
-                        .map_or(true, |b| has_new_viewer(&b.viewers, &viewers))
+                        .map_or(true, |b| has_new_viewer(&b.viewers, &peers))
                     {
+                        // Only a change in the *peer* set gets here, so an
+                        // audience of any size can come and go without ever
+                        // interrupting the people already watching.
                         let due = rebuild_at.get_or_insert(now + JOIN_DEBOUNCE);
                         if now >= *due {
                             rebuild_at = None;
                             generation += 1;
                             let old = broadcast.take();
-                            let audience: Vec<String> = viewers.keys().cloned().collect();
-                            match rebuild(old, &cfg, audience.clone(), generation, &out_tx, &fail_tx)
+                            let served: Vec<String> = peers.keys().cloned().collect();
+                            match rebuild(
+                                old,
+                                &cfg,
+                                served.clone(),
+                                generation,
+                                &out_tx,
+                                &fail_tx,
+                                &frames_tx,
+                                &frame_seq,
+                            )
                             .await
                             {
                                 Ok(b) => {
                                     tracing::info!(
-                                        viewers = audience.len(),
+                                        peers = served.len(),
+                                        watchers = watchers.len(),
                                         generation,
                                         "video pipeline running"
                                     );
@@ -275,12 +395,21 @@ pub fn spawn(
 
                     // Mirror the audience size for the consoles. Published only
                     // on change: this is a Param, not a heartbeat.
-                    if published_count != Some(viewers.len()) {
-                        published_count = Some(viewers.len());
-                        let payload = crate::link::to_value(serde_json::json!(viewers.len()));
+                    if published_count != Some(audience) {
+                        published_count = Some(audience);
+                        let payload = crate::link::to_value(serde_json::json!(audience));
                         if let Err(err) = client.set(addr.status("viewers").as_str(), payload).await {
                             tracing::debug!(%err, "viewer count publish failed");
                         }
+                    }
+                }
+                frame = frames_rx.recv() => {
+                    let Some(frame) = frame else { continue };
+                    // Encoding runs for the peers regardless, so with nobody on
+                    // the broadcast the frames are dropped here rather than
+                    // spending uplink on an audience of nobody.
+                    if !watchers.is_empty() {
+                        publish_frame(&client, &addr, frame).await;
                     }
                 }
             }
@@ -305,22 +434,29 @@ pub fn spawn(
 /// The two are done together, in order, on one blocking thread: the old
 /// pipeline must have released the device before the new one opens it, or the
 /// new `v4l2src` gets EBUSY.
+#[allow(clippy::too_many_arguments)]
 async fn rebuild(
     old: Option<Broadcast>,
     cfg: &Config,
-    audience: Vec<String>,
+    served: Vec<String>,
     generation: u64,
     out_tx: &UnboundedSender<Outbound>,
     fail_tx: &UnboundedSender<Failure>,
+    frames_tx: &mpsc::Sender<EncodedFrame>,
+    frame_seq: &Arc<AtomicU32>,
 ) -> anyhow::Result<Broadcast> {
     let cfg = cfg.clone();
     let out_tx = out_tx.clone();
     let fail_tx = fail_tx.clone();
+    let frames_tx = frames_tx.clone();
+    let frame_seq = frame_seq.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(old) = old {
             old.stop();
         }
-        Broadcast::start(&cfg, &audience, generation, &out_tx, &fail_tx)
+        Broadcast::start(
+            &cfg, &served, generation, &out_tx, &fail_tx, &frames_tx, &frame_seq,
+        )
     })
     .await
     .map_err(|err| anyhow::anyhow!("pipeline build task failed: {err}"))?
@@ -357,12 +493,9 @@ impl Broadcast {
         generation: u64,
         out_tx: &UnboundedSender<Outbound>,
         fail_tx: &UnboundedSender<Failure>,
+        frames_tx: &mpsc::Sender<EncodedFrame>,
+        frame_seq: &Arc<AtomicU32>,
     ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            !viewers.is_empty(),
-            "refusing to build a pipeline with no viewers"
-        );
-
         // Resolve the camera fresh each time: the USB camera can re-enumerate
         // to a different /dev/videoN after a power glitch, so a fixed node goes
         // stale. See resolve_camera_device.
@@ -372,18 +505,48 @@ impl Broadcast {
         // (a level string), otherwise it fails to process frames. It also
         // maxes out at 1920 wide, so capture the camera's 1280x480 side-by-side
         // mode rather than its 2560-wide modes.
+        //
+        // The split happens on *encoded* H264, before RTP payloading, so the
+        // broadcast branch gets access units it can put on the relay while the
+        // peers get the RTP they need. `allow-not-linked` keeps a tee that has
+        // no branches at the moment from erroring the pipeline out, which is
+        // the normal state when everyone is watching the broadcast.
         let mut description = format!(
             "v4l2src device={device} ! image/jpeg,width={width},height={height},framerate={fps}/1 \
              ! jpegdec ! queue ! videoconvert ! video/x-raw,format=I420 \
              ! v4l2h264enc ! video/x-h264,level=(string)4 \
              ! h264parse config-interval=-1 \
-             ! rtph264pay pt=96 ! application/x-rtp,media=video,encoding-name=H264,payload=96 \
-             ! tee name=fanout",
+             ! tee name=encoded allow-not-linked=true",
             device = device,
             width = cfg.camera_width,
             height = cfg.camera_height,
             fps = cfg.camera_fps,
         );
+
+        // The broadcast tap. `config-interval=-1` repeats SPS/PPS ahead of
+        // every keyframe, which is what lets somebody who arrives mid-stream
+        // start decoding at the next one instead of never. byte-stream and
+        // alignment=au hand the browser whole access units in the form
+        // WebCodecs expects. The sink drops rather than blocks: the camera must
+        // never wait on the network.
+        description.push_str(
+            " encoded. ! queue leaky=downstream max-size-buffers=0 max-size-bytes=0 \
+             max-size-time=300000000 \
+             ! h264parse config-interval=-1 \
+             ! video/x-h264,stream-format=byte-stream,alignment=au \
+             ! appsink name=broadcastsink sync=false max-buffers=4 drop=true",
+        );
+
+        // The peer chain exists only when somebody is actually on a track.
+        // Payloading once and fanning the result out is what keeps a second
+        // peer cheaper than the first.
+        if !viewers.is_empty() {
+            description.push_str(
+                " encoded. ! queue ! rtph264pay pt=96 \
+                 ! application/x-rtp,media=video,encoding-name=H264,payload=96 \
+                 ! tee name=fanout allow-not-linked=true",
+            );
+        }
         for index in 0..viewers.len() {
             // leaky=downstream is what keeps one wedged peer from stalling the
             // tee, and with it the picture for everyone else. Bounded by time
@@ -402,6 +565,7 @@ impl Broadcast {
 
         let shutdown = Arc::new(AtomicBool::new(false));
         watch_bus(&pipeline, generation, shutdown.clone(), fail_tx.clone());
+        attach_broadcast_sink(&pipeline, frames_tx.clone(), frame_seq.clone())?;
 
         let mut peers = HashMap::with_capacity(viewers.len());
         for (index, viewer) in viewers.iter().enumerate() {
@@ -469,13 +633,81 @@ impl Broadcast {
         self.peers.remove(viewer);
     }
 
+    fn stop_sink(&self) {
+        // Drop the callback before teardown so a sample already in flight on a
+        // streaming thread cannot outlive the channel it was going to.
+        if let Some(sink) = self.pipeline.by_name("broadcastsink") {
+            if let Ok(sink) = sink.downcast::<gst_app::AppSink>() {
+                sink.set_callbacks(gst_app::AppSinkCallbacks::builder().build());
+            }
+        }
+    }
+
     fn stop(&self) {
+        self.stop_sink();
         self.shutdown.store(true, Ordering::Relaxed);
         let _ = self.pipeline.set_state(gst::State::Null);
         // Block until the pipeline has actually reached NULL so the camera fd is
         // released before the next one opens the same device. Without this, a
         // rebuild races the old v4l2src and the new one gets EBUSY.
         let _ = self.pipeline.state(gst::ClockTime::from_seconds(2));
+    }
+}
+
+/// Wire the broadcast tap to the publishing task.
+///
+/// The callback runs on a GStreamer streaming thread, so it must neither block
+/// nor await. It copies the access unit, stamps it, and hands it over; the
+/// relay side of the work happens on the tokio task that owns the client.
+fn attach_broadcast_sink(
+    pipeline: &gst::Pipeline,
+    frames: mpsc::Sender<EncodedFrame>,
+    seq: Arc<AtomicU32>,
+) -> anyhow::Result<()> {
+    let sink = pipeline
+        .by_name("broadcastsink")
+        .ok_or_else(|| anyhow::anyhow!("pipeline has no appsink named 'broadcastsink'"))?
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| anyhow::anyhow!("broadcastsink is not an appsink"))?;
+
+    sink.set_callbacks(
+        gst_app::AppSinkCallbacks::builder()
+            .new_sample(move |sink| {
+                let sample = sink.pull_sample().map_err(|_| gst::FlowError::Eos)?;
+                let buffer = sample.buffer().ok_or(gst::FlowError::Error)?;
+                let map = buffer.map_readable().map_err(|_| gst::FlowError::Error)?;
+
+                // Anything that is not a delta unit is an IDR, which is the
+                // only place a decoder that just arrived can start.
+                let keyframe = !buffer.flags().contains(gst::BufferFlags::DELTA_UNIT);
+
+                // try_send and never send: blocking here would push back into
+                // the encoder and take the picture down for the peers too, to
+                // deliver broadcast frames that are already too late to watch.
+                let _ = frames.try_send(EncodedFrame {
+                    seq: seq.fetch_add(1, Ordering::Relaxed),
+                    keyframe,
+                    data: map.as_slice().to_vec(),
+                });
+                Ok(gst::FlowSuccess::Ok)
+            })
+            .build(),
+    );
+    Ok(())
+}
+
+/// Cut one access unit into relay-sized chunks and publish them.
+///
+/// A Stream, not a Param: this is high rate and best effort by contract, and a
+/// dropped frame is corrected by the next keyframe rather than by retrying a
+/// picture nobody wants any more.
+async fn publish_frame(client: &Arc<Clasp>, addr: &Addresses, frame: EncodedFrame) {
+    let address = addr.video_broadcast();
+    for chunk in crate::broadcast::fragment(frame.seq, frame.keyframe, &frame.data) {
+        if let Err(err) = client.stream(address.as_str(), Value::Bytes(chunk)).await {
+            tracing::debug!(%err, "broadcast publish failed");
+            return;
+        }
     }
 }
 

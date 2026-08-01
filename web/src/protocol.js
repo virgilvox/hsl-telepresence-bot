@@ -25,7 +25,21 @@ export function addresses(robotId) {
     telPattern: `${base}/tel/**`,
     videoHello: `${base}/video/hello`,
     videoSignal: (session) => `${base}/video/signal/${session}`,
+    // The encoded stream, published once and fanned out by the relay. See
+    // "Proving the link works" and the broadcast section in docs/protocol.md.
+    videoBroadcast: `${base}/video/broadcast`,
+    // The robot's own liveness token. The console reads it to tell a robot that
+    // is talking from one that is also listening.
+    health: `${base}/health`,
   }
+}
+
+// Role a console asks for in its `video/hello`. A peer connection is the
+// low-latency path and the robot only has a few; the broadcast costs the robot
+// nothing per viewer, so everyone who is not driving should be on it.
+export const ViewerRole = {
+  Peer: 'viewer',
+  Broadcast: 'broadcast',
 }
 
 // Signal message kinds exchanged on the video/signal path. Mirrors SignalMessage

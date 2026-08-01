@@ -90,6 +90,13 @@ impl Addresses {
         format!("{}/video/signal/**", self.base)
     }
 
+    /// Where the encoded stream is published for everyone not on a WebRTC
+    /// track. One publication, fanned out by the relay, so the robot pays the
+    /// same whether one person is watching or fifty. See `broadcast.rs`.
+    pub fn video_broadcast(&self) -> String {
+        format!("{}/video/broadcast", self.base)
+    }
+
     /// Where the agent writes its own liveness token and reads it back.
     ///
     /// Deliberately outside `status/`, `tel/` and `cmd/`: no console subscribes
@@ -223,12 +230,28 @@ impl SignalMessage {
     }
 }
 
+/// Role a viewer asks for in its `hello`. A console that wants to drive needs
+/// the latency only a peer connection gives; one that is watching does not, and
+/// asking for the cheaper path is what lets the audience grow without bound.
+pub const ROLE_BROADCAST: &str = "broadcast";
+
 /// Payload of a viewer's `hello` Event, telling the robot who wants a stream.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Presence {
     pub session: String,
     #[serde(default)]
     pub role: String,
+}
+
+impl Presence {
+    /// Whether this viewer is asking for a WebRTC track of its own.
+    ///
+    /// Anything that is not explicitly a broadcast watcher gets a peer, so a
+    /// console written before the broadcast path existed, which sends
+    /// `role: "viewer"` or no role at all, keeps behaving exactly as it did.
+    pub fn wants_peer(&self) -> bool {
+        self.role != ROLE_BROADCAST
+    }
 }
 
 /// Video-plane events the link layer forwards to the video task. Defined here,

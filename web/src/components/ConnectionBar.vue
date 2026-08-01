@@ -9,6 +9,8 @@ const props = defineProps({
   connected: { type: Boolean, default: false },
   connecting: { type: Boolean, default: false },
   online: { type: Boolean, default: false },
+  // Tri-state: true responding, false deaf, null not yet known.
+  responsive: { type: Boolean, default: null },
   sessionId: { type: String, default: null },
   error: { type: String, default: null },
 })
@@ -27,7 +29,11 @@ watch(
 const linkState = computed(() => {
   if (props.connecting) return 'linking'
   if (!props.connected) return 'offline'
-  return props.online ? 'robot online' : 'relay only'
+  if (!props.online) return 'relay only'
+  // Publishing but not hearing us. Worth its own word, because everything else
+  // on screen looks perfectly healthy in this state.
+  if (props.responsive === false) return 'not responding'
+  return 'robot online'
 })
 
 function update(key, value) {
@@ -53,7 +59,11 @@ function update(key, value) {
       <div class="readout">
         <span
           class="lamp"
-          :class="{ live: connected && online, busy: connecting || (connected && !online) }"
+          :class="{
+            live: connected && online && responsive !== false,
+            busy: connecting || (connected && !online),
+            deaf: connected && online && responsive === false,
+          }"
         />
         <span class="robot">{{ settings.robotId || 'no robot' }}</span>
         <span class="state">{{ linkState }}</span>
