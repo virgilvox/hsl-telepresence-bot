@@ -5,10 +5,12 @@
 
 use crate::config::Config;
 use crate::control::Arbiter;
+use crate::health::Health;
 use crate::motion::MotionCommand;
 use crate::protocol::{
     Addresses, ControlCommand, DriveCommand, Presence, SignalMessage, VideoEvent, PROTOCOL_VERSION,
 };
+use anyhow::Context;
 use clasp_client::prelude::Value;
 use clasp_client::Clasp;
 use serde::de::DeserializeOwned;
@@ -21,6 +23,9 @@ pub struct Link {
     pub client: Arc<Clasp>,
     pub addr: Addresses,
     pub session: String,
+    /// Round-trip check on this link, kept so the supervisor in `main` can wait
+    /// on it. See `health.rs` for what it is for.
+    pub health: Arc<Health>,
 }
 
 impl Link {
@@ -34,7 +39,14 @@ impl Link {
     }
 }
 
-/// Connect to the relay, publish initial status, and wire up subscriptions.
+/// Connect to the relay, subscribe, prove the link works, then publish status.
+///
+/// The order is the point. Subscribing first puts the relay's retained command
+/// values, a latched e-stop above all, on their way before anything else
+/// happens. Verifying next turns the first round trip into a barrier, because
+/// it cannot come back ahead of values the relay queued before it. Only then
+/// does the robot announce itself, so `status/online` is a statement that
+/// commands will be obeyed rather than a hope that they will be.
 pub async fn connect(
     cfg: &Config,
     motion_tx: UnboundedSender<MotionCommand>,
@@ -50,13 +62,39 @@ pub async fn connect(
     }
 
     let client = Arc::new(builder.connect().await?);
+    // `reconnect(true)` on the builder only records the intent. The client
+    // reconnects when this loop is running and not otherwise: without it the
+    // disconnect notification has nobody listening for it, a dropped socket is
+    // never rebuilt, and because nothing anywhere returns an error the process
+    // stays up looking healthy while the robot is gone.
+    client.start_reconnect_loop();
+
     let session = client.session_id().unwrap_or_default();
     let addr = Addresses::new(&cfg.robot_id);
 
-    // Latched status the operator console renders on connect.
+    subscribe_commands(&client, &addr, motion_tx, arbiter).await?;
+    subscribe_video(&client, &addr, video_tx).await?;
+
+    let health = Health::attach(client.clone(), &addr).await?;
+    health
+        .verify()
+        .await
+        .context("relay accepted the connection but does not deliver to it")?;
+
+    publish_status(&client, &addr).await?;
+
+    Ok(Link {
+        client,
+        addr,
+        session,
+        health,
+    })
+}
+
+/// The latched status an operator console renders the moment it connects.
+async fn publish_status(client: &Arc<Clasp>, addr: &Addresses) -> anyhow::Result<()> {
     client.set(addr.status("online").as_str(), true).await?;
     client.set(addr.status("mode").as_str(), "manual").await?;
-    client.set(addr.status("estop").as_str(), false).await?;
     // Tells a console this robot arbitrates the wheel and can serve several
     // viewers. Its absence is what marks an older robot, so it must be
     // published before anything else can act on it.
@@ -77,15 +115,10 @@ pub async fn connect(
             to_value(serde_json::json!(0)),
         )
         .await?;
-
-    subscribe_commands(&client, &addr, motion_tx, arbiter).await?;
-    subscribe_video(&client, &addr, video_tx).await?;
-
-    Ok(Link {
-        client,
-        addr,
-        session,
-    })
+    // `status/estop` is deliberately not published here. The telemetry plane
+    // mirrors it from the motors themselves, so a robot that comes up to an
+    // e-stop latched on the relay never announces itself as clear first.
+    Ok(())
 }
 
 async fn subscribe_commands(
@@ -219,6 +252,11 @@ pub(crate) fn to_value(json: serde_json::Value) -> Value {
 
 fn as_bool(value: &Value) -> Option<bool> {
     to_json(value).as_bool()
+}
+
+/// Read a `Value` back as a plain string, for payloads that are just a token.
+pub(crate) fn as_string(value: &Value) -> Option<String> {
+    to_json(value).as_str().map(str::to_string)
 }
 
 fn as_f64(value: &Value) -> Option<f64> {

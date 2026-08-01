@@ -1,8 +1,53 @@
 # Handoff
 
-Last updated 2026-07-31.
+Last updated 2026-08-01.
 
 Current state of the telepresence robot, what is verified, and what to do next.
+
+## The deaf-robot failure, and what now catches it (2026-08-01)
+
+The robot was found running, publishing `status/online` and 5 Hz telemetry, and
+receiving nothing at all. Not a crash and not a disconnect: the socket was open,
+the relay was fanning the robot's telemetry out to consoles, and `cmd/estop`,
+`cmd/control` and `video/hello` were all ignored with no log line anywhere. The
+journal held 22 minutes of complete silence. Restarting the service cleared it
+immediately. The relay and the client library were both ruled out: a standalone
+Rust subscriber on clasp-client 4.5.0 received Events, Params and Streams on the
+same address patterns while the robot sat there deaf.
+
+Four things were wrong, and each of them independently could produce a robot
+that needs a power cycle:
+
+- **Reconnection was never armed.** `link.rs` set `.reconnect(true)` on the
+  builder, but clasp-client only reconnects once the application calls
+  `Clasp::start_reconnect_loop()`, and nothing ever did. That function is
+  `pub` and is called nowhere in the crate itself either. A dropped socket was
+  therefore permanent, and silently so.
+- **Nothing supervised the link.** `main.rs` watched the motion task precisely
+  because a robot that "sits there looking online and ignoring every command" is
+  the worst available failure. The link, which is the thing that actually
+  failed, had no equivalent.
+- **Subscriptions are never confirmed.** `subscribe` and `set` both push a frame
+  and return success without waiting on the relay, so a connection can come up
+  with none of its subscriptions registered and report no error.
+- **The failure was invisible.** The only lines that would have reported it are
+  `debug!`, and the log filter named the package (`hsl_telepresence_robot`)
+  rather than the bin target (`robot`), which matches nothing. Every debug line
+  in the agent was off.
+
+What is in place now: the reconnect loop is started; a round-trip health check
+(`robot/src/health.rs`, and "Proving the link works" in `docs/protocol.md`)
+proves the relay actually delivers to this robot before it publishes
+`status/online` and every 15 seconds after that; four consecutive failures exit
+the process so systemd rebuilds the connection; the log filter is fixed; and
+`robot.service` uses `Restart=always` with `StartLimitIntervalSec=0` so the unit
+can never give up and stay dead on a shelf.
+
+Ordering changed with it. The agent now subscribes first, verifies, and only
+then publishes status, which makes the first round trip a barrier: a latched
+e-stop has reached the motors before the robot announces itself. `status/estop`
+is no longer published as `false` at startup; the telemetry plane mirrors it
+from the motors instead.
 
 ## Read this first if you are picking up after 2026-07-31
 

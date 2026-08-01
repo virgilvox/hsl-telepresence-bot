@@ -16,6 +16,16 @@ pub fn spawn(
     mut estopped: watch::Receiver<bool>,
 ) {
     tokio::spawn(async move {
+        // Mirror the e-stop once before watching for changes. `changed()` only
+        // fires on a transition, so a robot that came up to an e-stop already
+        // latched on the relay would otherwise never publish it, and every
+        // console would render a stopped robot as clear until somebody
+        // toggled it.
+        // Copy out of the guard before awaiting: it is a sync lock, and holding
+        // it across an await makes the whole task non-Send.
+        let initial = *estopped.borrow();
+        publish_estop(&client, &addr, initial).await;
+
         let mut ticker = tokio::time::interval(Duration::from_millis(200));
         loop {
             tokio::select! {
@@ -33,11 +43,15 @@ pub fn spawn(
                         break; // motion task gone
                     }
                     let value = *estopped.borrow();
-                    if let Err(err) = client.set(addr.status("estop").as_str(), value).await {
-                        tracing::debug!(%err, "estop status publish failed");
-                    }
+                    publish_estop(&client, &addr, value).await;
                 }
             }
         }
     });
+}
+
+async fn publish_estop(client: &Arc<Clasp>, addr: &Addresses, engaged: bool) {
+    if let Err(err) = client.set(addr.status("estop").as_str(), engaged).await {
+        tracing::debug!(%err, "estop status publish failed");
+    }
 }

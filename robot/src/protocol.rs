@@ -89,6 +89,15 @@ impl Addresses {
     pub fn video_signal_pattern(&self) -> String {
         format!("{}/video/signal/**", self.base)
     }
+
+    /// Where the agent writes its own liveness token and reads it back.
+    ///
+    /// Deliberately outside `status/`, `tel/` and `cmd/`: no console subscribes
+    /// here, so the check costs an operator nothing and can never be mistaken
+    /// for robot state. See `health.rs` for what it proves.
+    pub fn health(&self) -> String {
+        format!("{}/health", self.base)
+    }
 }
 
 /// A continuous teleoperation command. Sent on `cmd/drive` as a Stream at

@@ -31,6 +31,7 @@ a single lossy frame.
 | `tel/motors` | Stream | `{ left, right }` | Applied wheel demand, ~5 Hz. |
 | `video/hello` | Event | `{ session, role }` | A viewer's presence heartbeat, repeated every few seconds for as long as it wants video. |
 | `video/signal/<session>` | Event | `SignalMessage` | SDP/ICE, keyed by recipient session. |
+| `health` | Param | `string` | The robot's own liveness token, written and read back by itself. Consoles ignore it. See "Proving the link works". |
 
 ## DriveCommand
 
@@ -136,6 +137,29 @@ viewers. Because it repeats, it doubles as the liveness signal: a viewer the
 robot has not heard from in 20 seconds is dropped, which is how a closed tab
 frees its slot without waiting on an ICE timeout, and it is also what lets every
 viewer recover on its own after a robot restart.
+
+## Proving the link works
+
+A CLASP `subscribe` is fire and forget. It registers the callback locally, puts
+a frame on the wire, and returns success without waiting for the relay to
+confirm anything. So there is a state in which the robot is connected, publishes
+happily, and is never delivered a single command, because its subscriptions were
+never registered. Every console shows it online and it obeys nothing. This has
+happened in the field, and nothing in the protocol as described above can tell
+you it is happening.
+
+`health` closes that hole. The robot subscribes to it, writes itself a unique
+token, and waits to see the token come back. A relay that echoes the robot's own
+writes is a relay that is delivering to the robot's subscriptions, so one round
+trip covers a closed socket, a forgotten session, a subscription that never
+registered, and a reconnect that dropped them. The robot does this once before
+it publishes `status/online`, which is what makes that flag mean "commands will
+be obeyed" rather than "a socket opened", and then every 15 seconds afterwards.
+Four consecutive failures and the agent exits so its supervisor can rebuild the
+connection from scratch.
+
+Consoles have no reason to subscribe here, which is why the address sits outside
+`status/`, and no reason to write to it.
 
 ## Safety model
 

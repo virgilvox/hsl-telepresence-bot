@@ -16,12 +16,21 @@ Wants=network-online.target
 # journal fills with a failure that looks like a bug and is not.
 After=time-sync.target
 Wants=time-sync.target
+# Never stop trying. The default is to give up after five starts in ten
+# seconds and leave the unit dead until a human notices, which for a robot on a
+# shelf means dead until somebody walks over to it. Every failure here is one
+# that starting over can fix: no network yet, no clock yet, a relay that is
+# briefly down.
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
 EnvironmentFile=/etc/hsl-telepresence/robot.env
 ExecStart=/usr/local/bin/hsl-robot
-Restart=on-failure
+# `always`, not `on-failure`. The agent exits 0 only on SIGTERM, which systemd
+# does not restart anyway, so this costs nothing and covers any future path
+# that ends the process without an error code.
+Restart=always
 RestartSec=3
 # The process needs the I2C and video devices. Add the pi user to the i2c and
 # video groups, or run as a dedicated user with those groups.
