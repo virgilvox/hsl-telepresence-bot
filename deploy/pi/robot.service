@@ -10,6 +10,12 @@
 Description=HeatSync Labs telepresence robot agent
 After=network-online.target
 Wants=network-online.target
+# The Pi has no clock across reboots, so it can reach the network before it
+# knows the date. Starting then makes the relay's TLS certificate look
+# not-yet-valid and the agent exits; the restart policy recovers it, but the
+# journal fills with a failure that looks like a bug and is not.
+After=time-sync.target
+Wants=time-sync.target
 
 [Service]
 Type=simple

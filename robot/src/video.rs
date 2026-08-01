@@ -101,7 +101,6 @@ pub fn spawn(
     client: Arc<Clasp>,
     addr: Addresses,
     cfg: Config,
-    session: String,
     mut rx: UnboundedReceiver<VideoEvent>,
 ) {
     tokio::spawn(async move {
@@ -162,6 +161,9 @@ pub fn spawn(
                         VideoEvent::Signal(message) => {
                             if let SignalMessage::Bye { from } = &message {
                                 if viewers.remove(from).is_some() {
+                                    if let Some(b) = broadcast.as_mut() {
+                                        b.forget(from);
+                                    }
                                     tracing::info!(viewer = %from, watching = viewers.len(), "viewer said goodbye");
                                 }
                                 continue;
@@ -177,8 +179,13 @@ pub fn spawn(
                     if outbound.generation != generation {
                         continue; // produced by a pipeline we have since replaced
                     }
+                    // Stamped here, not where the message was built: the relay
+                    // hands out a new session on every reconnect, and a peer
+                    // that replies to a stale one is talking to nobody.
+                    let mut message = outbound.message;
+                    message.set_from(client.session_id().unwrap_or_default());
                     let payload = crate::link::to_value(
-                        serde_json::to_value(&outbound.message).unwrap_or(serde_json::Value::Null),
+                        serde_json::to_value(&message).unwrap_or(serde_json::Value::Null),
                     );
                     if let Err(err) = client
                         .emit(addr.video_signal(&outbound.to).as_str(), payload)
@@ -206,6 +213,9 @@ pub fn spawn(
                         Failure::Viewer { viewer, .. } => {
                             let was_watching = viewers.remove(&viewer).is_some();
                             if was_watching {
+                                if let Some(b) = broadcast.as_mut() {
+                                    b.forget(&viewer);
+                                }
                                 tracing::info!(%viewer, watching = viewers.len(), "viewer connection lost");
                             }
                         }
@@ -213,13 +223,18 @@ pub fn spawn(
                 }
                 _ = sweep.tick() => {
                     let now = Instant::now();
-                    viewers.retain(|viewer, last_seen| {
-                        let alive = now.saturating_duration_since(*last_seen) < VIEWER_TIMEOUT;
-                        if !alive {
-                            tracing::info!(%viewer, "viewer timed out");
+                    let expired: Vec<String> = viewers
+                        .iter()
+                        .filter(|(_, seen)| now.saturating_duration_since(**seen) >= VIEWER_TIMEOUT)
+                        .map(|(viewer, _)| viewer.clone())
+                        .collect();
+                    for viewer in expired {
+                        viewers.remove(&viewer);
+                        if let Some(b) = broadcast.as_mut() {
+                            b.forget(&viewer);
                         }
-                        alive
-                    });
+                        tracing::info!(%viewer, watching = viewers.len(), "viewer timed out");
+                    }
 
                     if viewers.is_empty() {
                         if let Some(old) = broadcast.take() {
@@ -237,9 +252,7 @@ pub fn spawn(
                             generation += 1;
                             let old = broadcast.take();
                             let audience: Vec<String> = viewers.keys().cloned().collect();
-                            match rebuild(
-                                old, &cfg, &session, audience.clone(), generation, &out_tx, &fail_tx,
-                            )
+                            match rebuild(old, &cfg, audience.clone(), generation, &out_tx, &fail_tx)
                             .await
                             {
                                 Ok(b) => {
@@ -295,21 +308,19 @@ pub fn spawn(
 async fn rebuild(
     old: Option<Broadcast>,
     cfg: &Config,
-    from: &str,
     audience: Vec<String>,
     generation: u64,
     out_tx: &UnboundedSender<Outbound>,
     fail_tx: &UnboundedSender<Failure>,
 ) -> anyhow::Result<Broadcast> {
     let cfg = cfg.clone();
-    let from = from.to_string();
     let out_tx = out_tx.clone();
     let fail_tx = fail_tx.clone();
     tokio::task::spawn_blocking(move || {
         if let Some(old) = old {
             old.stop();
         }
-        Broadcast::start(&cfg, &from, &audience, generation, &out_tx, &fail_tx)
+        Broadcast::start(&cfg, &audience, generation, &out_tx, &fail_tx)
     })
     .await
     .map_err(|err| anyhow::anyhow!("pipeline build task failed: {err}"))?
@@ -342,7 +353,6 @@ struct Broadcast {
 impl Broadcast {
     fn start(
         cfg: &Config,
-        from: &str,
         viewers: &[String],
         generation: u64,
         out_tx: &UnboundedSender<Outbound>,
@@ -401,7 +411,7 @@ impl Broadcast {
                 .ok_or_else(|| anyhow::anyhow!("pipeline has no webrtcbin named '{name}'"))?;
             webrtc.set_property_from_str("stun-server", STUN_SERVER);
 
-            connect_peer(&webrtc, viewer, from, generation, out_tx, fail_tx);
+            connect_peer(&webrtc, viewer, generation, out_tx, fail_tx);
             peers.insert(viewer.clone(), webrtc);
         }
 
@@ -445,6 +455,18 @@ impl Broadcast {
             }
             SignalMessage::Offer { .. } | SignalMessage::Bye { .. } => {}
         }
+    }
+
+    /// Forget a viewer we have stopped serving.
+    ///
+    /// Without this a viewer whose connection blipped would be dropped from the
+    /// live set but still counted as served by the running pipeline, so its
+    /// next hello would not look like a new arrival, nothing would rebuild, and
+    /// it would never be offered video again. It would sit on "waiting for
+    /// robot" forever while everyone else watched.
+    fn forget(&mut self, viewer: &str) {
+        self.viewers.retain(|v| v != viewer);
+        self.peers.remove(viewer);
     }
 
     fn stop(&self) {
@@ -498,7 +520,6 @@ fn watch_bus(
 fn connect_peer(
     webrtc: &gst::Element,
     viewer: &str,
-    from: &str,
     generation: u64,
     out_tx: &UnboundedSender<Outbound>,
     fail_tx: &UnboundedSender<Failure>,
@@ -529,16 +550,9 @@ fn connect_peer(
     {
         let out_tx = out_tx.clone();
         let viewer = viewer.to_string();
-        let from = from.to_string();
         webrtc.connect("on-negotiation-needed", false, move |values| {
             let webrtc = values[0].get::<gst::Element>().expect("element argument");
-            create_offer(
-                &webrtc,
-                out_tx.clone(),
-                from.clone(),
-                viewer.clone(),
-                generation,
-            );
+            create_offer(&webrtc, out_tx.clone(), viewer.clone(), generation);
             None
         });
     }
@@ -546,7 +560,6 @@ fn connect_peer(
     {
         let out_tx = out_tx.clone();
         let viewer = viewer.to_string();
-        let from = from.to_string();
         webrtc.connect("on-ice-candidate", false, move |values| {
             let sdp_mline_index = values[1].get::<u32>().expect("mline index");
             let candidate = values[2].get::<String>().expect("candidate string");
@@ -554,7 +567,8 @@ fn connect_peer(
                 generation,
                 to: viewer.clone(),
                 message: SignalMessage::Ice {
-                    from: from.clone(),
+                    // Filled in as the message leaves; see the emit arm.
+                    from: String::new(),
                     candidate,
                     sdp_mline_index,
                 },
@@ -608,7 +622,6 @@ fn resolve_camera_device(configured: &str) -> String {
 fn create_offer(
     webrtc: &gst::Element,
     out_tx: UnboundedSender<Outbound>,
-    from: String,
     viewer: String,
     generation: u64,
 ) {
@@ -630,7 +643,7 @@ fn create_offer(
                 generation,
                 to: viewer.clone(),
                 message: SignalMessage::Offer {
-                    from: from.clone(),
+                    from: String::new(),
                     sdp,
                 },
             });
@@ -683,5 +696,16 @@ mod tests {
     fn a_swap_within_the_same_count_rebuilds() {
         // Same size, different people: comparing counts would miss this.
         assert!(has_new_viewer(&served(&["alice"]), &watching(&["bob"])));
+    }
+
+    #[test]
+    fn a_viewer_that_comes_back_after_dropping_out_rebuilds() {
+        // A blipped connection drops the viewer from the live set, and
+        // Broadcast::forget takes it out of the served list too. Without that
+        // second half its next hello would not look new, nothing would
+        // rebuild, and it would never be offered video again.
+        let mut still_served = served(&["alice", "bob"]);
+        still_served.retain(|v| v != "bob"); // what forget() does
+        assert!(has_new_viewer(&still_served, &watching(&["alice", "bob"])));
     }
 }

@@ -84,11 +84,24 @@ export function useVideo(robotId, iceServers = DEFAULT_ICE) {
     }
     pc.onconnectionstatechange = () => {
       if (pc !== mine) return
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-        // Say nothing to the robot: it sees the same failure and frees our
-        // slot. Go back to waiting so the heartbeat re-establishes.
-        state.value = 'waiting'
-        closePeer()
+      switch (pc.connectionState) {
+        case 'connected':
+          state.value = 'live'
+          break
+        case 'disconnected':
+          // Usually a blip that ICE recovers from on its own. Show it, but do
+          // not tear anything down: rebuilding costs a full renegotiation, and
+          // on the robot that means rebuilding the pipeline and interrupting
+          // everybody else watching.
+          state.value = 'connecting'
+          break
+        case 'failed':
+        case 'closed':
+          // Say nothing to the robot: it sees the same failure and frees our
+          // slot. Go back to waiting so the heartbeat re-establishes.
+          state.value = 'waiting'
+          closePeer()
+          break
       }
     }
     return pc

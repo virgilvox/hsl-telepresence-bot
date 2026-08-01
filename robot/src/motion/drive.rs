@@ -20,10 +20,12 @@ pub enum MotionCommand {
 }
 
 /// Handle returned to the rest of the system. Exposes a read-only view of the
-/// current wheel demand for telemetry.
+/// current wheel demand for telemetry, and the task itself so the orchestrator
+/// can notice if motion ever stops running.
 pub struct MotionHandle {
     pub speeds: watch::Receiver<WheelSpeeds>,
     pub estopped: watch::Receiver<bool>,
+    pub task: tokio::task::JoinHandle<()>,
 }
 
 /// Build the backend and spawn the motion task. The caller keeps the sending
@@ -39,13 +41,14 @@ pub fn spawn(
     let timeout = cfg.drive_timeout;
     let max_speed = cfg.max_speed;
 
-    tokio::spawn(async move {
+    let task = tokio::spawn(async move {
         run(backend, rx, speeds_tx, estop_tx, timeout, max_speed).await;
     });
 
     Ok(MotionHandle {
         speeds: speeds_rx,
         estopped: estop_rx,
+        task,
     })
 }
 

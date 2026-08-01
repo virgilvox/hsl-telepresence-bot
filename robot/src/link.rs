@@ -79,7 +79,7 @@ pub async fn connect(
         .await?;
 
     subscribe_commands(&client, &addr, motion_tx, arbiter).await?;
-    subscribe_video(&client, &addr, &session, video_tx).await?;
+    subscribe_video(&client, &addr, video_tx).await?;
 
     Ok(Link {
         client,
@@ -154,7 +154,6 @@ async fn subscribe_commands(
 async fn subscribe_video(
     client: &Arc<Clasp>,
     addr: &Addresses,
-    session: &str,
     video_tx: UnboundedSender<VideoEvent>,
 ) -> anyhow::Result<()> {
     // Viewers announce themselves with a hello Event.
@@ -169,18 +168,27 @@ async fn subscribe_video(
 
     // Signaling addressed to us. The address ends with the recipient session;
     // we process only messages addressed to us, and ignore echoes of our own.
-    let me = session.to_string();
+    //
+    // The session is read live rather than captured, because the relay issues a
+    // new one on every reconnect. Comparing against the session we had at
+    // startup would silently drop every answer and every ICE candidate from the
+    // first reconnect onwards, and video would never negotiate again while the
+    // control plane carried on looking perfectly healthy.
+    let me = client.clone();
     let tx = video_tx;
     client
         .subscribe(
             addr.video_signal_pattern().as_str(),
             move |value, address| {
+                let Some(current) = me.session_id() else {
+                    return;
+                };
                 let recipient = address.rsplit('/').next().unwrap_or_default();
-                if recipient != me {
+                if recipient != current {
                     return;
                 }
                 if let Some(message) = decode::<SignalMessage>(&value) {
-                    if message.from() == me {
+                    if message.from() == current {
                         return;
                     }
                     let _ = tx.send(VideoEvent::Signal(message));

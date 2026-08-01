@@ -31,7 +31,10 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
     token: token || undefined,
     reconnect: true,
   })
-  const session = client.session
+  // Read live, never captured: the relay issues a new session on every
+  // reconnect, and signalling addressed to the old one goes nowhere. The real
+  // agent had exactly this bug.
+  const me = () => client.session
 
   // Arbitration, the same rules as robot/src/control.rs.
   let driver = null // { session, name }
@@ -133,6 +136,7 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
 
   unsubs.push(
     client.on(`${addr.base}/video/signal/**`, (value, address) => {
+      const session = me()
       if (address.slice(address.lastIndexOf('/') + 1) !== session) return
       if (!value || value.from === session) return
       const entry = viewers.get(value.from)
@@ -171,7 +175,7 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
       if (!event.candidate) return
       client.emit(addr.videoSignal(viewer), {
         kind: SignalKind.Ice,
-        from: session,
+        from: me(),
         candidate: event.candidate.candidate,
         sdpMLineIndex: event.candidate.sdpMLineIndex ?? 0,
       })
@@ -186,7 +190,7 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
       await pc.setLocalDescription(offer)
       client.emit(addr.videoSignal(viewer), {
         kind: SignalKind.Offer,
-        from: session,
+        from: me(),
         sdp: pc.localDescription.sdp,
       })
     } catch (err) {
@@ -231,7 +235,7 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
 
   function report() {
     onState?.({
-      session,
+      session: me(),
       driver,
       estopped,
       wheels,
@@ -243,7 +247,9 @@ export async function startAgent({ robotId, url, token, stream, onDemand, onEsto
   report()
 
   return {
-    session,
+    get session() {
+      return me()
+    },
     tick,
     async stop() {
       for (const viewer of [...viewers.keys()]) dropViewer(viewer)

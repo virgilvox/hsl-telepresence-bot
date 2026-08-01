@@ -97,6 +97,74 @@ rebuild, or on the Pi
 `sudo systemctl stop hsl-robot-update.timer && cd ~/hsl-telepresence-bot && git checkout 769e28e && (rebuild per "Rebuild and redeploy")`. The console tolerates
 an older robot by design, so reverting only the Pi is safe.
 
+## Audit, 2026-07-31
+
+A pass over the whole system looking for defects rather than features. Seven
+real ones, all fixed. Recorded here because most of them are the kind that stay
+invisible until the day they matter.
+
+**A reconnect killed video for good.** The relay issues a *new session on every
+reconnect*, and the agent captured its session once at startup. From the first
+reconnect onwards it filtered inbound signalling against a session that no
+longer existed, so every answer and every ICE candidate was silently dropped:
+video could never negotiate again, while the control plane carried on looking
+perfectly healthy. The session is now read live at the moment it is used, and
+outbound signalling is stamped as it leaves rather than when it is built.
+(`link.rs`, `video.rs`, `protocol.rs`.) The simulator had inherited the same bug
+and has the same fix.
+
+**SIGTERM was never handled.** The shutdown path waited on `ctrl_c()` alone, and
+systemd stops units with SIGTERM, so on every `systemctl restart` the robot was
+simply killed: motors left exactly as they were, and a latched `status/online`
+still telling every console the robot was there. Now both signals are handled.
+
+**Nothing stopped the motors if the motion task died.** The PCA9685 holds its
+registers until told otherwise, so a panic anywhere in the motion task would
+have left the wheels turning with nothing left alive to stop them. The backend
+now coasts on `Drop`, which covers the panic, the cancellation and the unwind,
+not just the orderly path. The orchestrator also watches the motion task and
+exits if it ever ends, so the supervisor restarts a healthy process.
+
+**A viewer whose connection blipped could never get video again.** Dropping a
+viewer removed it from the live set but left it in the running pipeline's served
+list, so its next hello did not look like a new arrival, nothing rebuilt, and it
+sat on "waiting for robot" forever while everyone else watched.
+`Broadcast::forget` now takes it out of both.
+
+**The pipeline blocked the async runtime.** Tearing down waits for the pipeline
+to reach NULL, and opening a wedged USB camera can stall for a long time; both
+ran on a runtime worker thread that the motion watchdog shares. Now on a
+blocking thread, still ordered, because the old pipeline has to release the
+camera before the new one opens it.
+
+**The console called a dead robot online forever.** `status/online` is latched,
+so a robot killed uncleanly never clears it and the relay serves `true` to
+everyone afterwards. The staleness check meant to catch that compared against
+`Date.now()` inside a computed, which is not reactive, so it only re-evaluated
+when a message arrived: never, in the one case it existed for.
+
+**Console state leaked between robots.** Point the console at an older robot
+after a newer one and the previous robot's `status/protocol` convinced it the
+new one arbitrated the wheel, while a stale `driver` named somebody else holding
+it. The pad locked and the robot could not be driven at all. Mirrored state is
+now cleared when the subscription is rebuilt.
+
+Also: `robot.service` now orders after `time-sync.target`. The Pi has no clock
+across reboots and could reach the network before it knew the date, which makes
+the relay's certificate look not-yet-valid and kills the agent on boot; the
+restart policy recovered it, but it filled the journal with a failure that looks
+like a bug. **This one needs a manual step on the Pi**, because the self-updater
+only installs the binary:
+
+```
+sudo cp deploy/pi/robot.service /etc/systemd/system/hsl-robot.service
+sudo systemctl daemon-reload
+```
+
+Not changed, by decision: the relay is unauthenticated and the console is
+public, so anyone who loads the page can drive the robot and anyone can stand up
+a simulator claiming to be it. Accepted for a hackerspace robot.
+
 ## Action items, in order
 
 1. **Confirm drive direction.** Forward now drives both wheels the same way

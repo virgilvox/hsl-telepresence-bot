@@ -43,6 +43,17 @@ export function useTelemetry(robotId) {
 
   function subscribe() {
     unsubscribe()
+    // Everything here mirrors one robot, so it cannot be carried across to the
+    // next one. Point the console at an older robot after a newer one and the
+    // stale `protocol` would convince it the new robot arbitrates the wheel,
+    // while the stale `driver` named somebody else holding it: the pad locks
+    // and the robot cannot be driven at all. Params re-snapshot on subscribe,
+    // so anything still true is about to arrive again anyway.
+    for (const key of Object.keys(status)) delete status[key]
+    motors.left = 0
+    motors.right = 0
+    lastSeen.value = 0
+
     const c = client.value
     if (!c || !connected.value || !robotId.value) return
     const addr = addresses(robotId.value)

@@ -200,6 +200,18 @@ impl SignalMessage {
             | SignalMessage::Bye { from } => from,
         }
     }
+
+    /// Stamp the sender. Done as the message leaves rather than where it is
+    /// built, because the relay issues a new session on every reconnect and the
+    /// only correct value is the one current at the moment of sending.
+    pub fn set_from(&mut self, who: String) {
+        match self {
+            SignalMessage::Offer { from, .. }
+            | SignalMessage::Answer { from, .. }
+            | SignalMessage::Ice { from, .. }
+            | SignalMessage::Bye { from } => *from = who,
+        }
+    }
 }
 
 /// Payload of a viewer's `hello` Event, telling the robot who wants a stream.

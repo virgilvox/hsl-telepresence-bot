@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     // Motion first: building the backend proves the motor hardware is reachable
     // before we advertise the robot as online.
     let (motion_tx, motion_rx) = mpsc::unbounded_channel();
-    let motion = motion::spawn(&cfg, motion_rx)?;
+    let mut motion = motion::spawn(&cfg, motion_rx)?;
 
     // Video events flow from the link layer to the video task. The channel
     // exists even when video is compiled out, so the link layer stays uniform.
@@ -62,7 +62,6 @@ async fn main() -> anyhow::Result<()> {
         link.client.clone(),
         link.addr.clone(),
         cfg.clone(),
-        link.session.clone(),
         video_rx,
     );
     #[cfg(not(feature = "video"))]
@@ -75,15 +74,53 @@ async fn main() -> anyhow::Result<()> {
     audio::spawn_best_effort();
 
     tracing::info!("robot online");
-    tokio::signal::ctrl_c().await?;
+
+    // Wait for either a shutdown signal or the motion task giving up. The
+    // second is not supposed to happen, but a robot whose motion plane has
+    // quietly died would otherwise sit there looking online and ignoring
+    // every command, which is the worst of the available failures.
+    tokio::select! {
+        _ = shutdown_signal() => {
+            tracing::info!("shutdown requested; stopping motors");
+        }
+        result = &mut motion.task => {
+            tracing::error!(?result, "motion task ended; exiting so the supervisor restarts us");
+            // The backend coasts as it is dropped, so the wheels are already
+            // stopped by the time we get here.
+            let _ = link.set_offline().await;
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            std::process::exit(1);
+        }
+    }
 
     // Fail safe on the way out: stop the motors and drop offline promptly.
-    tracing::info!("shutdown requested; stopping motors");
     let _ = motion_tx.send(MotionCommand::EStop(true));
     let _ = link.set_offline().await;
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     Ok(())
+}
+
+/// Resolve when the service is asked to stop.
+///
+/// systemd stops units with SIGTERM, so waiting only on SIGINT means the
+/// shutdown above never runs on `systemctl restart`: the motors keep whatever
+/// they were doing until the process dies, and `status/online` stays latched
+/// true on the relay, telling every console the robot is still there.
+async fn shutdown_signal() {
+    use tokio::signal::unix::{signal, SignalKind};
+    match signal(SignalKind::terminate()) {
+        Ok(mut term) => {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+        }
+        Err(err) => {
+            tracing::warn!(%err, "cannot listen for SIGTERM; falling back to SIGINT only");
+            let _ = tokio::signal::ctrl_c().await;
+        }
+    }
 }
 
 fn init_tracing() {

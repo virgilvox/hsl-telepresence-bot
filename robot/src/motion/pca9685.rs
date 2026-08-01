@@ -70,6 +70,22 @@ impl MotorBackend for HatBackend {
     }
 }
 
+impl Drop for HatBackend {
+    /// Stop the motors on the way out, whatever the way out was.
+    ///
+    /// The PCA9685 holds its registers until something changes them, so the
+    /// wheels keep turning after the only thing that could stop them has gone.
+    /// The orderly shutdown path already coasts, but this also covers the ways
+    /// out that nobody wrote down: the motion task panicking, or being
+    /// cancelled, or the process unwinding. Those are exactly the cases where
+    /// there is nobody left to notice a robot driving into something.
+    fn drop(&mut self) {
+        if let Err(err) = self.coast() {
+            tracing::error!(%err, "failed to coast the motors while shutting down");
+        }
+    }
+}
+
 /// Convert an I2C address into the PCA9685 pin-strap tuple the driver expects.
 /// The base address is 0x40; the bits above that select the six address pins
 /// A5..A0. The Adafruit default 0x60 sets A5 only.
