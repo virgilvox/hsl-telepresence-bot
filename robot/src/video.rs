@@ -322,9 +322,12 @@ pub fn spawn(
                         now.saturating_duration_since(*seen) >= VIEWER_TIMEOUT
                     };
 
+                    // `stale(*seen)`, not `stale(seen)`: `iter()` hands the
+                    // filter a `&(&String, &Instant)`, and argument position
+                    // gets no auto-deref.
                     let expired: Vec<String> = peers
                         .iter()
-                        .filter(|(_, seen)| stale(seen))
+                        .filter(|(_, seen)| stale(*seen))
                         .map(|(viewer, _)| viewer.clone())
                         .collect();
                     for viewer in expired {
@@ -633,18 +636,10 @@ impl Broadcast {
         self.peers.remove(viewer);
     }
 
-    fn stop_sink(&self) {
-        // Drop the callback before teardown so a sample already in flight on a
-        // streaming thread cannot outlive the channel it was going to.
-        if let Some(sink) = self.pipeline.by_name("broadcastsink") {
-            if let Ok(sink) = sink.downcast::<gst_app::AppSink>() {
-                sink.set_callbacks(gst_app::AppSinkCallbacks::builder().build());
-            }
-        }
-    }
-
     fn stop(&self) {
-        self.stop_sink();
+        // The appsink callback needs no unwiring: NULL stops the streaming
+        // threads, and a sample already in flight just fails its `try_send`
+        // against a receiver that has gone.
         self.shutdown.store(true, Ordering::Relaxed);
         let _ = self.pipeline.set_state(gst::State::Null);
         // Block until the pipeline has actually reached NULL so the camera fd is
