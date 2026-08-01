@@ -14,7 +14,11 @@ set -euo pipefail
 REPO="${HSL_REPO:-/home/pi/hsl-telepresence-bot}"
 BUILD_USER="${HSL_BUILD_USER:-pi}"
 BRANCH="${HSL_BRANCH:-main}"
-BINARY_DEST="/usr/local/bin/hsl-robot"
+# Destinations, overridable so the whole script can be exercised against a
+# sandbox rather than the real system paths.
+BINARY_DEST="${HSL_BINARY_DEST:-/usr/local/bin/hsl-robot}"
+UNIT_DIR="${HSL_UNIT_DIR:-/etc/systemd/system}"
+SCRIPT_DEST="${HSL_SCRIPT_DEST:-/usr/local/bin/hsl-robot-update}"
 # The revision the installed binary was actually built from. Compared against
 # the remote instead of the checkout's HEAD, because the checkout moves forward
 # before the build runs: if a build fails, HEAD already matches the remote and
@@ -69,6 +73,43 @@ as_user "cd '$REPO' && git reset --hard 'origin/$BRANCH'"
 
 log "building release agent (this takes several minutes on the Pi)"
 as_user "cd '$REPO/robot' && $BUILD_ENV \$HOME/.cargo/bin/cargo build --release"
+
+# Bring the units and this script itself into step with the repo, not just the
+# binary. Installing only the binary means every fix to the unit that runs the
+# agent, or to this updater, can reach the Pi only by hand, and a fix that can
+# only be applied by hand is one that sits in git being forgotten. Done before
+# the restart so a unit change shipped alongside a code change takes effect in
+# the same pass.
+sync_file() {
+  local src="$1" dest="$2" mode="$3"
+  if [ ! -f "$src" ] || cmp -s "$src" "$dest"; then
+    return 1
+  fi
+  # Write beside the target and rename, rather than writing through it. The
+  # rename is atomic, which matters most for this very script: bash reads it as
+  # it goes, and truncating it mid-run would feed the shell garbage.
+  install -m "$mode" "$src" "$dest.new"
+  mv -f "$dest.new" "$dest"
+  log "installed $(basename "$dest")"
+  return 0
+}
+
+units_changed=0
+for unit in robot.service hsl-robot-update.service hsl-robot-update.timer; do
+  dest="$UNIT_DIR/$unit"
+  if [ "$unit" = "robot.service" ]; then dest="$UNIT_DIR/hsl-robot.service"; fi
+  if sync_file "$REPO/deploy/pi/$unit" "$dest" 644; then
+    units_changed=1
+  fi
+done
+if [ "$units_changed" = 1 ]; then
+  systemctl daemon-reload
+fi
+
+# Replacing the running script is safe because of the rename above: this
+# process keeps reading the old inode until it exits, and the next timer tick
+# runs the new one.
+sync_file "$REPO/deploy/pi/update.sh" "$SCRIPT_DEST" 755 || true
 
 log "installing binary and restarting service"
 install -m 755 "$REPO/robot/target/release/robot" "$BINARY_DEST"

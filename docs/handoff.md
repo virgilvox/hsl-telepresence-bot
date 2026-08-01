@@ -153,13 +153,31 @@ Also: `robot.service` now orders after `time-sync.target`. The Pi has no clock
 across reboots and could reach the network before it knew the date, which makes
 the relay's certificate look not-yet-valid and kills the agent on boot; the
 restart policy recovered it, but it filled the journal with a failure that looks
-like a bug. **This one needs a manual step on the Pi**, because the self-updater
-only installs the binary:
+like a bug.
+
+**The updater now updates more than the binary.** It used to install only
+`hsl-robot`, which meant every fix to a unit file, or to the updater itself, could
+reach the Pi only by hand: a fix that can only be applied by hand is one that
+sits in git being forgotten, and two of them already had. It now also installs
+the three systemd units (reloading only when one actually changed) and replaces
+itself, writing beside each target and renaming so that swapping the script out
+from under the running shell is atomic. `deploy/pi/test-update.sh` exercises the
+whole thing against a sandbox with stubbed `runuser`, `systemctl` and `cargo`,
+including the failed-build case, because the alternative is finding out on the
+robot that the thing which installs fixes is itself broken.
+
+That leaves exactly one manual step, once, to bootstrap the new updater onto a
+Pi still running the old one:
 
 ```
+cd ~/hsl-telepresence-bot && git pull
+sudo install -m 755 deploy/pi/update.sh /usr/local/bin/hsl-robot-update
 sudo cp deploy/pi/robot.service /etc/systemd/system/hsl-robot.service
 sudo systemctl daemon-reload
 ```
+
+After that it keeps itself current. The agent binary was already updating on its
+own and still will, with or without this.
 
 Not changed, by decision: the relay is unauthenticated and the console is
 public, so anyone who loads the page can drive the robot and anyone can stand up
