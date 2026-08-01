@@ -1,0 +1,67 @@
+# Build and test the Pi agent.
+#
+# This exists because the Pi builds whatever is on main. Without a check here,
+# code that does not compile reaches the robot, and the only symptom is an
+# updater that quietly rebuilds and fails every hour while the robot keeps
+# running an old binary. That is a bad way to find out.
+#
+# The video plane needs GStreamer headers, which is exactly the part hardest to
+# typecheck on a laptop, so it is the part that most needs building here.
+
+name: robot
+
+on:
+  push:
+    paths:
+      - 'robot/**'
+      - '.github/workflows/robot.yml'
+  pull_request:
+    paths:
+      - 'robot/**'
+      - '.github/workflows/robot.yml'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # webrtcbin and the SDP types live in plugins-bad, so the -bad headers are
+      # required and not optional here.
+      - name: Install GStreamer development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgstreamer1.0-dev \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: robot
+
+      - name: Formatting
+        working-directory: robot
+        run: cargo fmt --check
+
+      # The default feature set is what the Pi builds: motor-hat and video. A
+      # check that skipped them would miss the code most likely to break.
+      - name: Build (default features, as the Pi builds it)
+        working-directory: robot
+        run: cargo build --locked --all-targets
+
+      - name: Clippy
+        working-directory: robot
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Tests
+        working-directory: robot
+        run: cargo test
