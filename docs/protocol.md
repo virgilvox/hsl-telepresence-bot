@@ -5,7 +5,7 @@ implement this contract. Keep them in sync.
 
 All addresses are rooted at `/robot/<robot_id>`. The robot subscribes to its
 command and config subtrees; the operator subscribes to status, telemetry, and
-its own video signaling address.
+the video broadcast.
 
 ## Signal type choice
 
@@ -118,16 +118,17 @@ trickle `ice` candidates to each other's signaling address. Media flows over the
 resulting native WebRTC track, never over CLASP. On its way out a viewer sends
 `bye` so its slot frees immediately rather than after a timeout.
 
-Up to four viewers are served at once. The robot captures and encodes once and
-fans the encoded stream out to one WebRTC peer each, so the expensive half of
-the work does not scale with the audience.
+**This path is vestigial.** The robot no longer grants anyone a WebRTC track:
+`role` is ignored and every viewer is served the broadcast, for the reasons in
+"One stream, no per-viewer state" above. The signalling addresses and the
+`webrtcbin` code still exist but are unreachable, kept only because deleting
+them is a large diff with no behavioural gain. Nothing sends an `offer` any
+more.
 
-Adding a viewer rebuilds the pipeline, which briefly interrupts the people
-already watching. That is deliberate: splicing a branch into a live GStreamer
-pipeline risks wedging the streaming thread and taking the camera down for
-everyone, while a rebuild cannot get stuck and, as a bonus, makes the new
-encoder emit a keyframe immediately so the joiner sees a picture at once. A
-viewer *leaving* does not rebuild anything.
+Historically this was the video path, and it is the reason the section above
+exists: the robot served up to four peers from branches of its own capture
+pipeline, and admitting one rebuilt that pipeline and interrupted everybody
+already watching.
 
 `hello` is an Event rather than a persistent presence Param on purpose. A
 persistent per-session Param would accumulate stale entries (every past console
