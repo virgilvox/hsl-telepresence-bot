@@ -199,8 +199,16 @@ export function useBroadcast(robotId) {
     const chunk = parseChunk(bytes)
     if (!chunk) return
 
+    // Drop anything too far behind before the fast path returns. Almost every
+    // frame is a single chunk, so pruning after that early return meant the
+    // sweep only ran on keyframes and a broken frame was held for keyframes'
+    // worth of time rather than frames'.
+    for (const seq of pending.keys()) {
+      if (((chunk.seq - seq) >>> 0) > REASSEMBLY_DEPTH) pending.delete(seq)
+    }
+
     // The common case by a wide margin: everything but a keyframe fits in one
-    // message, so skip the bookkeeping entirely.
+    // message, so skip the rest of the bookkeeping entirely.
     if (chunk.count === 1) {
       onAccessUnit(chunk.seq, chunk.keyframe, chunk.payload)
       return
@@ -225,11 +233,6 @@ export function useBroadcast(robotId) {
         offset += part.length
       }
       onAccessUnit(chunk.seq, entry.keyframe, whole)
-    }
-
-    // Anything this far behind lost a chunk and will never complete.
-    for (const seq of pending.keys()) {
-      if (((chunk.seq - seq) >>> 0) > REASSEMBLY_DEPTH) pending.delete(seq)
     }
   }
 

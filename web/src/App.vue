@@ -10,7 +10,7 @@ import { useClasp } from './composables/useClasp.js'
 import { useRobotControl } from './composables/useRobotControl.js'
 import { useTelemetry } from './composables/useTelemetry.js'
 import { useVideo } from './composables/useVideo.js'
-import { useBroadcast } from './composables/useBroadcast.js'
+import { useBroadcast, isBroadcastSupported } from './composables/useBroadcast.js'
 import { useDrive } from './composables/useDrive.js'
 
 const STORAGE_KEY = 'hsl-console-settings'
@@ -40,50 +40,11 @@ const isDriver = computed(
 )
 const wheelFree = computed(() => !driver.value?.session)
 
-// A peer connection is the low-latency path and the robot has only a few, so
-// it is asked for when it is worth having: while driving. Everyone else, and
-// that is most people most of the time, watches the broadcast the relay fans
-// out, which costs the robot nothing per viewer.
-//
-// The hold is what makes this usable. The driving lease lapses 1.5 s after the
-// last command, which is deliberately short so the wheel passes freely, but
-// tying the track to it directly would tear down and renegotiate the peer
-// every time the driver paused to look at something. So the track is kept for
-// a while after the wheel goes, and only really given up by someone who has
-// stopped driving.
-const PEER_HOLD_MS = 30000
-const holdingPeer = ref(false)
-let peerHold = null
-
-watch(
-  isDriver,
-  (driving) => {
-    if (driving) {
-      if (peerHold) clearTimeout(peerHold)
-      peerHold = null
-      holdingPeer.value = true
-      return
-    }
-    if (!holdingPeer.value || peerHold) return
-    peerHold = setTimeout(() => {
-      peerHold = null
-      holdingPeer.value = false
-    }, PEER_HOLD_MS)
-  },
-  { immediate: true },
-)
-onUnmounted(() => {
-  if (peerHold) clearTimeout(peerHold)
-})
-
-// Until the robot's status has arrived we do not know whether it arbitrates,
-// and guessing "legacy" would have every console grab a scarce peer slot for
-// the first second of every connection. Waiting costs nothing: presence is a
-// heartbeat, so the right request goes out moments later either way.
-const statusKnown = computed(() => status.online !== undefined)
-const wantsPeer = computed(
-  () => statusKnown.value && (!arbitrated.value || isDriver.value || holdingPeer.value),
-)
+// Everyone watches the broadcast the relay fans out. Asking the robot for a
+// WebRTC track of its own made it rebuild its pipeline, which froze every other
+// watcher for about a second and a half, so the only consoles that still ask
+// are the ones that cannot decode the broadcast at all.
+const wantsPeer = computed(() => !isBroadcastSupported())
 const { remoteStream, state: videoState } = useVideo(robotId, wantsPeer)
 const {
   state: broadcastState,

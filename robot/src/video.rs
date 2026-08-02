@@ -3,21 +3,17 @@
 //!
 //! # Two paths, because they are wanted for different things
 //!
-//! A **peer connection** is the low-latency path, about a tenth of a second,
-//! and it is what teleoperation needs to feel like driving rather than like
-//! issuing instructions. Every peer costs the robot a payloader, DTLS/SRTP, and
-//! another full copy of the bitrate out of one Pi on shared WiFi, so there are
-//! only ever a handful ([`MAX_PEERS`]) and they go to whoever is driving.
+//! Everyone watches the same thing: the encoded stream is published once to a
+//! CLASP address and the relay fans it out (see `crate::broadcast`). The robot
+//! pays the same whether one person is watching or fifty, and the number of
+//! people who can watch is bounded by the relay rather than by the Pi.
 //!
-//! The **broadcast** is the other path: the encoded stream published once to a
-//! CLASP address and fanned out by the relay (see `crate::broadcast`). It costs
-//! the robot exactly the same whether one person is watching or fifty, so the
-//! size of the audience stops being the robot's problem at all. It also never
-//! touches this pipeline, which matters more than it sounds: arriving to watch
-//! cannot interrupt anyone already watching.
-//!
-//! So the limit that used to be on viewers is now only on peers, and the number
-//! of people who can watch is bounded by the relay rather than by the Pi.
+//! The point is not only cost. **The publisher keeps no per-viewer state at
+//! all**, so arriving to watch cannot disturb anyone already watching. That is
+//! the property a video conference has and the reason joining one does not
+//! make everybody else stutter. This robot used to lack it: a viewer could ask
+//! for a WebRTC track of its own, granting one rebuilt the pipeline, and that
+//! froze every other watcher for about a second and a half.
 //!
 //! CLASP still carries no peer media: presence and SDP/ICE only. The broadcast
 //! is a deliberate exception, and it is encoded video on a Stream rather than a
@@ -105,19 +101,10 @@ const TARGET_BITRATE: u32 = 2_000_000;
 ///
 /// A keyframe is where somebody arriving mid-stream can start decoding, so
 /// this bounds how long a new watcher stares at nothing. It is also the point
-/// the broadcast recovers from after a gap. Two seconds at 30 fps.
-const KEYFRAME_INTERVAL: u32 = 60;
-
-/// Upper bound on simultaneous *peer* connections, which is not a limit on the
-/// audience.
-///
-/// Encoding is shared, but each extra peer still costs a payloader, DTLS/SRTP,
-/// and its own copy of the bitrate out of one Pi 3B+ on shared WiFi, so this
-/// number is about what the robot can push, and it is deliberately small.
-/// Everyone else watches the CLASP broadcast instead, which the relay fans out,
-/// so the number of people watching is bounded by the relay rather than by the
-/// robot. A peer is for whoever is driving and actually needs the latency.
-const MAX_PEERS: usize = 4;
+/// the broadcast recovers from after a gap. One second at 30 fps: halving it
+/// halves the worst-case wait for a picture, and at this bitrate the extra
+/// keyframes are affordable.
+const KEYFRAME_INTERVAL: u32 = 30;
 
 /// How long a viewer survives without saying hello. Consoles heartbeat every
 /// few seconds, so this drops a closed tab or a dead network well before a
@@ -135,10 +122,6 @@ const RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// How often the loop expires stale viewers and acts on a pending rebuild.
 const SWEEP: Duration = Duration::from_millis(250);
-
-/// Rate limit on the "too many viewers" warning. A viewer that cannot get in
-/// keeps announcing itself, and one line every heartbeat would bury the log.
-const FULL_WARNING_EVERY: Duration = Duration::from_secs(30);
 
 /// A signaling message and the viewer it is meant for, tagged with the pipeline
 /// generation that produced it so replies to a torn-down pipeline are dropped.
@@ -189,9 +172,6 @@ pub fn spawn(
         let mut generation: u64 = 0;
         let mut rebuild_at: Option<Instant> = None;
         let mut published_count: Option<usize> = None;
-        // A viewer that cannot get in keeps saying hello, so the "full" warning
-        // is rate-limited rather than logged every heartbeat.
-        let mut last_full_warning: Option<Instant> = None;
 
         let mut sweep = tokio::time::interval(SWEEP);
         // A rebuild parks this loop for a moment. Without this the interval
@@ -209,55 +189,29 @@ pub fn spawn(
                             }
                             let now = Instant::now();
 
-                            if !presence.wants_peer() {
-                                // A broadcast watcher. It cannot be refused,
-                                // because serving it costs the robot nothing:
-                                // the relay does the fanning out.
-                                let known = watchers.insert(presence.session.clone(), now).is_some();
-                                // Somebody switching to the broadcast should
-                                // stop being served a track they left behind.
-                                if peers.remove(&presence.session).is_some() {
-                                    if let Some(b) = broadcast.as_mut() {
-                                        b.forget(&presence.session);
-                                    }
-                                }
-                                if !known {
-                                    tracing::info!(
-                                        viewer = %presence.session,
-                                        watching = peers.len() + watchers.len(),
-                                        "watcher joined the broadcast"
-                                    );
-                                }
-                                continue;
-                            }
-
-                            let known = peers.contains_key(&presence.session);
-                            if !known && peers.len() >= MAX_PEERS {
-                                let due = last_full_warning
-                                    .map(|t| now.saturating_duration_since(t) >= FULL_WARNING_EVERY)
-                                    .unwrap_or(true);
-                                if due {
-                                    last_full_warning = Some(now);
-                                    tracing::warn!(
-                                        viewer = %presence.session,
-                                        max = MAX_PEERS,
-                                        "peer slots full; this viewer must watch the broadcast"
-                                    );
-                                }
-                                // Not turned away, just not given a track. It
-                                // still counts as present so the camera keeps
-                                // running for it, and its console falls back to
-                                // the broadcast when no offer arrives.
-                                watchers.insert(presence.session.clone(), now);
-                                continue;
-                            }
-                            watchers.remove(&presence.session);
-                            peers.insert(presence.session.clone(), now);
+                            // Everyone watches the broadcast, whatever role
+                            // they asked for.
+                            //
+                            // Honouring the request meant a viewer could ask
+                            // for a track, and granting one rebuilds the whole
+                            // pipeline, which froze every other watcher for
+                            // about a second and a half. Measured at 1336 ms
+                            // and 1503 ms, thirteen times over in ordinary use.
+                            // A publisher that keeps no per-viewer state cannot
+                            // have that problem, which is how a video
+                            // conference manages not to stutter every time
+                            // somebody joins.
+                            //
+                            // Ignoring the field rather than trusting consoles
+                            // to stop asking is deliberate: the console is a
+                            // static deploy, so one stale browser tab would
+                            // otherwise be enough to interrupt everybody.
+                            let known = watchers.insert(presence.session.clone(), now).is_some();
                             if !known {
                                 tracing::info!(
                                     viewer = %presence.session,
-                                    watching = peers.len() + watchers.len(),
-                                    "viewer joined on a peer connection"
+                                    watching = watchers.len(),
+                                    "viewer joined the broadcast"
                                 );
                             }
                         }

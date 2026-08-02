@@ -218,16 +218,22 @@ video {
   object-fit: contain;
   display: block;
 }
-/* Crop to a single eye by doubling the width and shifting to the chosen half. */
+/* Crop to a single eye by doubling the width and shifting to the chosen half.
+   Both sources need this: the crop used to name only the <video> element, so it
+   quietly did nothing for anyone watching the broadcast canvas. */
 .eye-left video,
-.eye-right video {
+.eye-left .broadcast,
+.eye-right video,
+.eye-right .broadcast {
   width: 200%;
   object-fit: cover;
 }
-.eye-left video {
+.eye-left video,
+.eye-left .broadcast {
   transform: translateX(-25%);
 }
-.eye-right video {
+.eye-right video,
+.eye-right .broadcast {
   transform: translateX(25%);
 }
 
