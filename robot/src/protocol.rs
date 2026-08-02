@@ -230,28 +230,17 @@ impl SignalMessage {
     }
 }
 
-/// Role a viewer asks for in its `hello`. A console that wants to drive needs
-/// the latency only a peer connection gives; one that is watching does not, and
-/// asking for the cheaper path is what lets the audience grow without bound.
-pub const ROLE_BROADCAST: &str = "broadcast";
-
-/// Payload of a viewer's `hello` Event, telling the robot who wants a stream.
+/// Payload of a viewer's `hello` Event, telling the robot somebody is watching.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Presence {
     pub session: String,
+    /// What the console asked to be served. Read off the wire and then
+    /// ignored: everyone gets the broadcast now, because a publisher holding
+    /// per-viewer state cannot admit one without disturbing the rest. Kept so
+    /// an older console's `hello` still deserializes.
     #[serde(default)]
+    #[allow(dead_code)]
     pub role: String,
-}
-
-impl Presence {
-    /// Whether this viewer is asking for a WebRTC track of its own.
-    ///
-    /// Anything that is not explicitly a broadcast watcher gets a peer, so a
-    /// console written before the broadcast path existed, which sends
-    /// `role: "viewer"` or no role at all, keeps behaving exactly as it did.
-    pub fn wants_peer(&self) -> bool {
-        self.role != ROLE_BROADCAST
-    }
 }
 
 /// Video-plane events the link layer forwards to the video task. Defined here,
