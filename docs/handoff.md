@@ -33,6 +33,68 @@ reach the robot on its own.
 Video is CLASP-only now. See "One stream, no per-viewer state" in
 `docs/protocol.md` for what changed and why.
 
+## What the video costs (measured 2026-08-02)
+
+| | rate | per hour | per day |
+|---|---|---|---|
+| Someone watching | 1.48 Mbps | 635 MB | 14.9 GB |
+| Control plane alone | 3.4 kbps | 1.5 MB | 35 MB |
+| Nobody watching | none | none | none |
+
+Three things worth knowing about those numbers.
+
+**The robot publishes one copy however many people watch.** The relay fans it
+out, so five viewers cost the robot exactly what one does. Five simultaneous
+subscribers for ninety seconds delivered 11975 of 11975 frames with the uplink
+flat at one copy.
+
+**With no audience the video stops completely.** `publish_frame` is gated on
+`!watchers.is_empty()` (`video.rs:387`), and once the last viewer times out the
+pipeline is torn down and the camera released (`video.rs:324`), so an idle robot
+costs only the 3.4 kbps control plane. That teardown is also, at present, the
+only thing that heals a camera which has gone to PLAYING and then stopped
+delivering, because that fault produces no bus error. Do not remove it before
+the frame watchdog exists.
+
+**A stationary robot costs the same as a moving one.** `v4l2h264enc` is given a
+fixed 2 Mbit/s target (`TARGET_BITRATE`, `video.rs`), so a static scene does not
+get cheaper: measured 1.48 Mbps stationary against 1.53 to 2.04 Mbps with people
+moving in frame. If the data matters, a variable bitrate or a lower idle target
+is the lever, and neither has been tried.
+
+## The USB brownout, 2026-08-02
+
+Video stopped. The cause was not software: the Pi's 5V rail sagged far enough to
+take down the entire USB subsystem. `lsusb` dropped to one device, the root hub.
+The camera, the SMSC9514 hub and the Ethernet adapter all disappeared together,
+with 76 undervoltage events and `error -71` during re-enumeration. SSH survived
+only because WiFi is SDIO on a Pi 3 rather than USB.
+
+The agent behaved correctly throughout: it named the missing camera, kept
+telemetry and the e-stop working, and retried every three seconds. Blind but
+drivable is the right way to degrade.
+
+**There is no software recovery.** The kernel's own `attempt power cycle`
+failed. Unbinding and rebinding `dwc_otg` oopsed the driver and left the bus
+just as dead. Only a reboot restored it, and it restored everything at once.
+
+So a robot that has been unable to open its camera for a sustained period with
+an audience present should reboot itself, with backoff. That is not built yet
+and belongs with the frame watchdog. Until then, a USB collapse needs a manual
+reboot, and it will recur until the power supply is adequate.
+
+## Speed ceiling
+
+The robot defaults to **two thirds throttle** (`config.rs`, and `MAX_SPEED` in
+`/etc/hsl-telepresence/robot.env`). Full throttle starts hard enough to lurch on
+this chassis, which is unpleasant to drive and pulls the most current from the
+rail that is already browning out.
+
+Full speed is available from the console's Drive panel as an explicit **Full
+speed** button, which sets `cfg/max_speed` to 1. The console reads the ceiling
+back from that Param rather than remembering what it last asked, so two consoles
+cannot disagree about how fast the robot may go.
+
 Current state of the telepresence robot, what is verified, and what to do next.
 
 ## The deaf-robot failure, and what now catches it (2026-08-01)
