@@ -29,7 +29,7 @@ a single lossy frame.
 | `status/viewers` | Param | `number` | How many operators are currently watching. |
 | `status/battery` | Param | `number` 0..1 | Optional. Rendered when present. |
 | `tel/motors` | Stream | `{ left, right }` | Applied wheel demand, ~5 Hz. |
-| `video/hello` | Event | `{ session, role }` | A viewer's presence heartbeat, repeated every few seconds for as long as it wants video. |
+| `video/hello` | Event | `{ session, role }` | A viewer's presence heartbeat, repeated every few seconds for as long as it wants video. `role` is read and ignored; see "One stream, no per-viewer state". |
 | `video/signal/<session>` | Event | `SignalMessage` | SDP/ICE, keyed by recipient session. |
 | `health` | Param | `string` | The robot's own liveness token, written and read back by itself. Consoles ignore it. See "Proving the link works". |
 
@@ -137,6 +137,35 @@ viewers. Because it repeats, it doubles as the liveness signal: a viewer the
 robot has not heard from in 20 seconds is dropped, which is how a closed tab
 frees its slot without waiting on an ICE timeout, and it is also what lets every
 viewer recover on its own after a robot restart.
+
+## One stream, no per-viewer state
+
+Everyone watching gets the same thing: the robot encodes once, publishes one
+copy on `video/broadcast`, and the relay fans it out. The robot pays the same
+whether one person is watching or fifty, and the audience is bounded by the
+relay rather than by the Pi.
+
+The cost is not the point. **The publisher keeps no state per viewer**, and that
+is what stops an arrival disturbing everyone already there. It is the property a
+video conference has, and the reason joining one does not make the other
+participants stutter.
+
+This robot used to lack it. A console could ask for a WebRTC track of its own,
+and granting one rebuilt the GStreamer pipeline that the camera, the encoder and
+the broadcast tap all sit on. Measured on hardware, that froze every watcher for
+1336 ms and then 1503 ms on two builds, and the robot reached its thirteenth
+rebuild in ordinary use. After the change the same request costs 168 ms against
+a 105 ms baseline, which is to say nothing at all.
+
+So `role` in a `hello` is read off the wire and ignored. Ignoring it rather than
+asking consoles to stop sending it is deliberate: the console is a static
+deploy, so one stale browser tab would otherwise still be able to interrupt
+everybody.
+
+The measured case for the relay carrying this: five simultaneous subscribers for
+ninety seconds delivered 11975 of 11975 frames, no loss, no duplicates, byte
+identical counts on every subscriber, while the robot's uplink stayed at one
+copy at 1.79 Mbps.
 
 ## Proving the link works
 

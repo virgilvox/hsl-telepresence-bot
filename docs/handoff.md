@@ -1,6 +1,37 @@
 # Handoff
 
-Last updated 2026-08-01.
+Last updated 2026-08-02.
+
+## Read this first (2026-08-02)
+
+The robot runs on a **replacement Pi 3B rev 1.2** at `hslbot.local`. The
+previous 3B+ stopped booting and never came back; repeated undervoltage during
+heavy SD writes is the most likely cause.
+
+**The power supply is still not adequate.** `vcgencmd get_throttled` reported
+`0x50005` (under-voltage now, currently throttled) at idle one minute after
+boot, with the HAT and camera attached and nothing running. Under compile load
+it browned out hard enough to segfault rustc six times. The motors have never
+been driven; that is the load that will hurt. Motors must be fed from the Motor
+HAT's own terminal, never through the Pi's rail, and the Pi wants a real 2.5 A
+supply with a short thick cable.
+
+**The Pi no longer builds its own code.** `.github/workflows/robot.yml` produces
+an aarch64 binary on a free arm64 runner inside a `debian:trixie` container, so
+it links against exactly the glibc and GStreamer the Pi has. Download the
+`hsl-robot-aarch64` artifact, `install -m 755` it over `/usr/local/bin/hsl-robot`,
+write the commit sha to `/var/lib/hsl-telepresence/built-rev`, restart. A full
+release build on the Pi takes 30 to 60 minutes at full CPU and is exactly what
+the brownouts cannot survive.
+
+**`hsl-robot-update.timer` is stopped on purpose.** The updater still does
+`git reset --hard` and `cargo build --release` on the Pi (`deploy/pi/update.sh`),
+which is the thing to avoid. Until it is taught to fetch the prebuilt binary,
+robot changes are deployed by hand as above. A push to `main` therefore does not
+reach the robot on its own.
+
+Video is CLASP-only now. See "One stream, no per-viewer state" in
+`docs/protocol.md` for what changed and why.
 
 Current state of the telepresence robot, what is verified, and what to do next.
 
