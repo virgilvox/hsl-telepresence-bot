@@ -65,3 +65,50 @@ jobs:
       - name: Tests
         working-directory: robot
         run: cargo test
+
+  # Produce the binary the Pi actually runs, so the Pi does not have to build
+  # it. A release build is 30 to 60 minutes at full CPU on a 3B, which is a lot
+  # to ask of a robot on a marginal power supply: a browning-out Pi segfaults
+  # the compiler and risks the SD card. Free arm64 runners make this a two
+  # minute job somewhere with real power and real cooling.
+  #
+  # Built inside Debian trixie, the same distribution the Pi runs, so the
+  # binary links against exactly the glibc and GStreamer it will find there
+  # rather than something merely close enough.
+  binary:
+    runs-on: ubuntu-24.04-arm
+    container: debian:trixie
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential pkg-config curl ca-certificates \
+            libssl-dev libudev-dev \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libgstreamer-plugins-bad1.0-dev
+
+      - name: Install Rust
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+            | sh -s -- -y --profile minimal --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      - name: Build release binary
+        working-directory: robot
+        run: cargo build --release --locked
+
+      - name: Record what it is
+        working-directory: robot
+        run: |
+          ls -l target/release/robot
+          file target/release/robot || true
+          echo "built from ${GITHUB_SHA}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hsl-robot-aarch64
+          path: robot/target/release/robot
+          retention-days: 30
