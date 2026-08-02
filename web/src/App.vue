@@ -23,9 +23,18 @@ const operatorName = computed(() => settings.name)
 
 const { connected, connecting, sessionId, error, connect, disconnect } = useClasp()
 const control = useRobotControl(robotId, operatorName)
-const { status, motors, lastSeen, online, responsive } = useTelemetry(robotId)
+const { status, motors, lastSeen, online, responsive, maxSpeed } = useTelemetry(robotId)
 
 const estopEngaged = computed(() => status.estop === true)
+
+// The robot starts at two thirds because full throttle lurches on this
+// chassis, which is unpleasant to drive and hard on the rail the motors share.
+// Full speed stays available, but as something you turn on deliberately.
+const NORMAL_SPEED = 2 / 3
+const fullSpeed = computed(() => (maxSpeed.value ?? NORMAL_SPEED) > 0.9)
+function toggleFullSpeed() {
+  control.setMaxSpeed(fullSpeed.value ? NORMAL_SPEED : 1)
+}
 
 // A robot that publishes no protocol version predates multi-operator support:
 // it serves one viewer and arbitrates nothing, so the console must let whoever
@@ -210,6 +219,25 @@ function saveSettings() {
           </div>
           <div class="panel-body">
             <DrivePad :drive="drive" :disabled="!mayDrive" />
+            <div class="speed">
+              <button
+                class="speedbtn"
+                :class="{ on: fullSpeed }"
+                :disabled="!connected"
+                @click="toggleFullSpeed"
+              >
+                {{ fullSpeed ? 'Full speed on' : 'Full speed' }}
+              </button>
+              <span class="speednote">
+                <template v-if="fullSpeed">
+                  Starts hard and can lurch. It also pulls the most current,
+                  which is what browns the Pi out.
+                </template>
+                <template v-else>
+                  Limited to two thirds, which starts smoothly.
+                </template>
+              </span>
+            </div>
           </div>
         </section>
 

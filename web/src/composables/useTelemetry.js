@@ -26,6 +26,10 @@ export function useTelemetry(robotId) {
   // dead since.
   const healthToken = ref(null)
   const healthChangedAt = ref(0)
+  // The robot's speed ceiling, mirrored from `cfg/max_speed`. Read from the
+  // robot rather than remembered locally, so two consoles cannot disagree
+  // about how fast the robot is allowed to go.
+  const maxSpeed = ref(null)
 
   // Liveness has to be derived from the passage of time, and time is not
   // reactive. Without this tick, `online` would only be recomputed when a
@@ -80,11 +84,19 @@ export function useTelemetry(robotId) {
     lastSeen.value = 0
     healthToken.value = null
     healthChangedAt.value = 0
+    maxSpeed.value = null
 
     const c = client.value
     if (!c || !connected.value || !robotId.value) return
     const addr = addresses(robotId.value)
 
+    unsubs.push(
+      c.on(addr.cfgPattern, (value, address) => {
+        if (tail(address) === 'max_speed' && typeof value === 'number') {
+          maxSpeed.value = value
+        }
+      }),
+    )
     unsubs.push(
       c.on(addr.health, (value) => {
         lastSeen.value = Date.now()
@@ -134,5 +146,5 @@ export function useTelemetry(robotId) {
     unsubscribe()
   })
 
-  return { status, motors, lastSeen, online, responsive }
+  return { status, motors, lastSeen, online, responsive, maxSpeed }
 }

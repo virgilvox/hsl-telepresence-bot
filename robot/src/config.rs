@@ -52,7 +52,11 @@ impl Config {
             i2c_bus: env_or("I2C_BUS", "/dev/i2c-1"),
             i2c_address: parse_u8("I2C_ADDRESS", 0x60)?,
             drive_timeout: Duration::from_millis(parse("DRIVE_TIMEOUT_MS", 400)?),
-            max_speed: parse("MAX_SPEED", 1.0f64)?.clamp(0.0, 1.0),
+            // Two thirds by default. Full throttle on this chassis starts
+            // hard enough to lurch, which is unpleasant to drive and hard on
+            // the power rail the motors share. Full speed is available, but as
+            // something an operator opts into rather than the default.
+            max_speed: parse("MAX_SPEED", 2.0f64 / 3.0)?.clamp(0.0, 1.0),
             invert_left: parse_bool("INVERT_LEFT", false),
             invert_right: parse_bool("INVERT_RIGHT", false),
 

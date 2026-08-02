@@ -305,3 +305,48 @@ input::placeholder {
     animation-duration: 1ms !important;
   }
 }
+
+/* Speed ceiling control. Deliberately quiet: the default is the safe one, and
+   turning it off is the thing that needs a moment's thought. */
+.speed {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.6rem;
+  margin-top: 0.75rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+
+.speedbtn {
+  flex: none;
+  font-family: inherit;
+  font-size: var(--size-xs);
+  letter-spacing: var(--track-wider);
+  text-transform: uppercase;
+  color: var(--text-dim);
+  background: transparent;
+  border: 1px solid var(--line-strong);
+  padding: 0.35rem 0.7rem;
+  cursor: pointer;
+}
+
+.speedbtn:hover:not(:disabled) {
+  color: var(--text);
+  border-color: var(--text-faint);
+}
+
+.speedbtn.on {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.speedbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.speednote {
+  font-size: var(--size-xs);
+  line-height: 1.5;
+  color: var(--text-faint);
+}
