@@ -86,6 +86,28 @@ const FRAME_QUEUE: usize = 8;
 
 const STUN_SERVER: &str = "stun://stun.l.google.com:19302";
 
+/// Target bitrate for the shared encoder, in bits per second.
+///
+/// Left unset, `v4l2h264enc` emits whatever it likes, which measured at about
+/// 7 Mbit/s for 1280x480. That is roughly three times what the picture needs
+/// and it is the wrong number in two directions at once: the broadcast has no
+/// congestion control of its own, so it simply fills the uplink, and every
+/// peer connection carries another full copy of it. A Pi 3B has 2.4 GHz WiFi
+/// and one radio, so two peers plus the broadcast at that rate is around
+/// 21 Mbit/s and the link falls over. That is what "video gets unstable when
+/// several people watch" turned out to mean.
+///
+/// 2 Mbit/s is a good picture at this resolution and leaves room for several
+/// peers alongside the broadcast.
+const TARGET_BITRATE: u32 = 2_000_000;
+
+/// Frames between keyframes.
+///
+/// A keyframe is where somebody arriving mid-stream can start decoding, so
+/// this bounds how long a new watcher stares at nothing. It is also the point
+/// the broadcast recovers from after a gap. Two seconds at 30 fps.
+const KEYFRAME_INTERVAL: u32 = 60;
+
 /// Upper bound on simultaneous *peer* connections, which is not a limit on the
 /// audience.
 ///
@@ -514,13 +536,16 @@ impl Broadcast {
         let mut description = format!(
             "v4l2src device={device} ! image/jpeg,width={width},height={height},framerate={fps}/1 \
              ! jpegdec ! queue ! videoconvert ! video/x-raw,format=I420 \
-             ! v4l2h264enc ! video/x-h264,level=(string)4 \
+             ! v4l2h264enc extra-controls=\"controls,video_bitrate={bitrate},h264_i_frame_period={gop}\" \
+             ! video/x-h264,level=(string)4 \
              ! h264parse config-interval=-1 \
              ! tee name=encoded allow-not-linked=true",
             device = device,
             width = cfg.camera_width,
             height = cfg.camera_height,
             fps = cfg.camera_fps,
+            bitrate = TARGET_BITRATE,
+            gop = KEYFRAME_INTERVAL,
         );
 
         // The broadcast tap. `config-interval=-1` repeats SPS/PPS ahead of

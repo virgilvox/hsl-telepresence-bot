@@ -31,6 +31,15 @@ const REASSEMBLY_DEPTH = 8
 // increase; the exact rate does not matter.
 const FRAME_INTERVAL_US = 33_333
 
+// How long without a decoded frame before the stream is called stalled.
+//
+// Without this the state stays 'live' from the first frame until the page is
+// closed, so a stream that stops dead still claims to be running and the
+// console shows a frozen picture with nothing saying otherwise. Comfortably
+// longer than a keyframe gap or the blackout of a pipeline rebuild, so it
+// reports a real interruption rather than every hiccup.
+const STALL_AFTER_MS = 2500
+
 export function isBroadcastSupported() {
   return typeof window !== 'undefined' && typeof window.VideoDecoder === 'function'
 }
@@ -96,6 +105,8 @@ export function useBroadcast(robotId) {
   // visible corruption. Both cases wait for the next keyframe.
   let needKeyframe = true
   let expectedSeq = null
+  let lastFrameAt = 0
+  let stallTimer = null
   const pending = new Map()
 
   function attach(element) {
@@ -130,6 +141,7 @@ export function useBroadcast(robotId) {
     // Missing this stalls the decoder within a second or two.
     frame.close()
     framesDecoded.value++
+    lastFrameAt = Date.now()
     if (state.value !== 'live') state.value = 'live'
   }
 
@@ -232,9 +244,25 @@ export function useBroadcast(robotId) {
     state.value = 'waiting'
     error.value = null
     unsub = c.on(addresses(robotId.value).videoBroadcast, onChunk)
+
+    stallTimer = setInterval(() => {
+      if (state.value !== 'live') return
+      if (Date.now() - lastFrameAt < STALL_AFTER_MS) return
+      // The robot rebuilds its pipeline whenever somebody takes a peer
+      // connection, which stops the broadcast for about a second. Say so, and
+      // resync from the next keyframe rather than decoding into the gap.
+      state.value = 'stalled'
+      needKeyframe = true
+      expectedSeq = null
+      pending.clear()
+    }, 500)
   }
 
   function stop() {
+    if (stallTimer) {
+      clearInterval(stallTimer)
+      stallTimer = null
+    }
     if (unsub) {
       try {
         unsub()
@@ -246,6 +274,7 @@ export function useBroadcast(robotId) {
     resetDecoder()
     pending.clear()
     expectedSeq = null
+    lastFrameAt = 0
     framesDecoded.value = 0
     if (state.value !== 'unsupported') state.value = 'idle'
   }

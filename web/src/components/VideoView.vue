@@ -56,6 +56,11 @@ const slowToConnect = computed(
 // state machine it is in.
 const waitLabel = computed(() => {
   if (!props.connected) return props.connecting ? 'Connecting to relay' : ''
+  // A stall is the common interruption and deserves its own words: the robot
+  // rebuilds its pipeline whenever somebody takes a direct connection, which
+  // stops the picture for about a second. Saying "reconnecting" is honest and
+  // stops a frozen frame reading as a live one.
+  if (props.broadcastState === 'stalled') return 'Video interrupted, reconnecting'
   if (props.broadcastState === 'unsupported' && props.state !== 'live') {
     return 'This browser cannot decode the broadcast; waiting for a direct connection'
   }
@@ -107,6 +112,7 @@ const sourceLabel = computed(() => {
   if (source.value === 'peer') return 'live \u00b7 direct'
   if (source.value === 'broadcast') return 'live \u00b7 broadcast'
   if (!props.connected) return 'not connected'
+  if (props.broadcastState === 'stalled') return 'reconnecting'
   return 'no picture'
 })
 </script>
