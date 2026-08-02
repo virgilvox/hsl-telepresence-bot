@@ -322,12 +322,9 @@ pub fn spawn(
                         now.saturating_duration_since(*seen) >= VIEWER_TIMEOUT
                     };
 
-                    // `stale(*seen)`, not `stale(seen)`: `iter()` hands the
-                    // filter a `&(&String, &Instant)`, and argument position
-                    // gets no auto-deref.
                     let expired: Vec<String> = peers
                         .iter()
-                        .filter(|(_, seen)| stale(*seen))
+                        .filter(|(_, seen)| stale(seen))
                         .map(|(viewer, _)| viewer.clone())
                         .collect();
                     for viewer in expired {

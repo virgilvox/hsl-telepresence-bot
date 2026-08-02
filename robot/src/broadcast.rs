@@ -34,6 +34,12 @@ pub const HEADER_LEN: usize = 10;
 const FLAG_KEYFRAME: u8 = 0b0000_0001;
 
 /// One chunk's header, as parsed off the wire.
+///
+/// The robot only ever writes this format; the browser reads it
+/// (`web/src/composables/useBroadcast.js`). So the reader here exists to hold
+/// the writer honest in tests rather than to be called in anger, and is built
+/// only for them.
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkHeader {
     /// Which access unit this belongs to. Wraps, and receivers must treat it
@@ -80,6 +86,9 @@ pub fn fragment(seq: u32, keyframe: bool, access_unit: &[u8]) -> Vec<Vec<u8>> {
 
 /// Read a chunk's header and borrow its payload. `None` for anything too
 /// short, of an unknown version, or self-contradictory.
+///
+/// Test-only, for the reason given on [`ChunkHeader`].
+#[cfg(test)]
 pub fn parse(chunk: &[u8]) -> Option<(ChunkHeader, &[u8])> {
     if chunk.len() < HEADER_LEN || chunk[0] != VERSION {
         return None;
